@@ -49,9 +49,11 @@ unverified phone --start--> Twilio-managed pending challenge
        +--check approved----------> verified_at set in UTC
 ```
 
-Locally, verification codes must contain 4–10 digits before they reach the gateway. Public endpoint throttling is not implemented because user-facing verification endpoints do not exist yet. It is required before those endpoints are exposed.
+Locally, verification codes must contain 4–10 digits before they reach the gateway. The authenticated API exposes owner-scoped enrollment, listing, verification-start, and verification-check actions. Missing and cross-owner phone IDs return `404`. Full numbers and codes are write-only; responses contain masked numbers and normalized verification status without provider SIDs.
 
-Demo mode currently applies to scheduled message/call delivery, not proof of phone ownership. Production and future user-facing flows should use real Verify; tests inject a fake gateway rather than creating a runtime bypass.
+Verification start and check actions use separate per-authenticated-user DRF throttle scopes. Defaults are three starts and ten checks per hour. Django's cache-backed throttles are intentionally a bounded abuse-control layer rather than a strict security or billing boundary; they can permit small race overruns and are process-local with the current default cache.
+
+Demo mode applies to scheduled message/call delivery, not proof of phone ownership. The authenticated verification actions use real Verify configuration at runtime; tests inject a fake gateway rather than creating a runtime bypass.
 
 ## ScheduledEvent
 
@@ -110,11 +112,13 @@ Application services must use the model transition method and save the associate
 ### Authenticated event API
 
 - All event endpoints require an authenticated custom `accounts.User` through DRF Basic or session authentication.
-- List and retrieve queries are filtered by owner. Another user's identifier returns `404`, including at the cancellation endpoint.
+- List and retrieve queries are filtered by owner. Another user's identifier returns `404`, including at every mutation endpoint.
 - Creation accepts a verified phone record ID owned by the authenticated user. Other users' and unverified phone records produce the same field-validation failure.
 - `scheduled_for` must include an explicit ISO 8601 offset. Inputs are normalized to UTC; naive local times are rejected because user time zones are not modeled.
 - API-created events are always demo events. Client-supplied `status` and `is_demo` values cannot override server-owned safety and lifecycle fields.
-- Event detail is read-only. Cancellation is a dedicated `POST` action and succeeds only from `scheduled`; lifecycle conflicts return `409`.
+- Event detail is read-only. Rescheduling, channel switching, and cancellation use dedicated `POST` actions and succeed only from `scheduled`; lifecycle conflicts return `409`.
+- Rescheduling requires a strictly future datetime with an explicit offset and stores the normalized UTC value. Channel switching accepts only `sms` or `voice`.
+- Pending-event changes lock and reload the authoritative row before validation and saving. They change only `scheduled_for` or `channel`, do not create attempts, and do not add a state transition.
 - API representations contain the phone record ID, not the full phone number, and never expose delivery message bodies, provider payloads, or credentials.
 - Lists are ordered by scheduled time and paginated at 50 records.
 
@@ -173,11 +177,11 @@ The Twilio Voice adapter follows the same demo restriction and returns only a va
 
 - The local dispatcher selects due `scheduled` events oldest-first in a bounded batch and claims them with PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED`.
 - Dispatcher runs are demo-only by default. Including real events requires both the disabled-by-default environment gate and an explicit command flag.
-- Claiming permits only `scheduled` events to enter `processing`; cancellation uses the same row-lock boundary, so exactly one operation wins the race.
+- Claiming permits only `scheduled` events to enter `processing`; cancellation, rescheduling, and channel switching use the same row-lock boundary, so concurrent mutations have one legal winner. A `SKIP LOCKED` batch may safely defer a row being changed until the next scheduler tick.
 - An event whose scheduled time is strictly more than the configured grace period in the past transitions through `processing` to `failed`, with a `MissedDeliveryWindow` attempt. It does not call weather or message providers. The default grace period is 15 minutes.
 - Reprocessing a terminal delivered/failed/suppressed event returns the latest attempt without another send.
 - A `processing` or `cancelled` event is not deliverable.
-- PostgreSQL tests validate duplicate-claim and cancellation races. SQLite tests validate the functional flow only.
+- PostgreSQL tests validate duplicate-claim, cancellation, rescheduling, and channel-switch races. SQLite tests validate the functional flow only.
 
 Queue invariants:
 

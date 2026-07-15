@@ -19,7 +19,7 @@ The repository is one Django project with four local applications:
 | App | Current responsibility |
 | --- | --- |
 | `accounts` | Custom user, owned phone numbers, verification services, and Twilio Verify adapter |
-| `scheduling` | One-time scheduled events, authenticated owner-scoped API, cancellation service, admin action, lifecycle, and deterministic scenario seeding |
+| `scheduling` | One-time scheduled events, authenticated owner-scoped API, row-locked pending-event mutation services, admin action, lifecycle, and deterministic scenario seeding |
 | `delivery` | Delivery attempts, due-event publication and claiming, SQS transport/worker, announcement rendering, Twilio adapters, callback handling, and orchestration |
 | `weather` | Normalized weather value object, provider boundary, deterministic fake, and WeatherAPI.com REST adapter |
 
@@ -98,7 +98,7 @@ Once execution enters `MessageSender`, every exception is terminal and acknowled
 
 ### Deployment artifacts
 
-Phase 10 adds deployment-ready CloudFormation without claiming a live environment:
+Phase 10 CloudFormation is deployed as a bounded staging environment in `us-east-1`:
 
 - `phase10-ecr.yaml` creates an encrypted immutable ECR repository with scan-on-push, bounded image retention, and an SNS alarm topic with an optional email subscription.
 - `phase8-queue.yaml` retains the queue/DLQ/Scheduler boundary and can route both queue alarms to the shared topic.
@@ -108,7 +108,7 @@ The same immutable image is used for all task definitions. The web command runs 
 
 ALB target checks use a task private IP in the HTTP `Host` header. Narrow first middleware answers only `/health/` requests carrying ALB's documented `ELB-HealthChecker/2.0` user agent, before Django host and HTTPS enforcement. Normal application traffic still uses the configured public-domain allowlist and TLS redirect; the target group accepts only HTTP 200.
 
-For safe initial rollout, web and worker desired counts are zero, the Scheduler is disabled, and real worker delivery is false. The runbook requires secret configuration and a successful migration before services start, then demo verification before Scheduler enablement. One NAT Gateway is an explicit staging cost tradeoff and a single-AZ outbound dependency; RDS Multi-AZ and deletion protection remain opt-in parameters.
+The initial zero-capacity rollout completed after secret configuration and a successful one-off migration. Web and worker now run at one task each. After the SNS email subscription was confirmed and test delivery succeeded, the one-minute Scheduler was enabled while real worker delivery remained false. An automatic tick verified that due demo events traverse SQS and become suppressed without provider SIDs; due real events remained untouched. One NAT Gateway is an explicit staging cost tradeoff and a single-AZ outbound dependency; RDS Multi-AZ and deletion protection remain off for this staging deployment.
 
 ### Authenticated event API
 
@@ -119,13 +119,28 @@ The minimal DRF surface is mounted under `/api/`:
 | `GET` | `/api/events/` | Paginated, scheduled-time-ordered events owned by the authenticated user |
 | `POST` | `/api/events/` | Create one future demo event for an owned verified phone record |
 | `GET` | `/api/events/{id}/` | Retrieve one owned event |
+| `POST` | `/api/events/{id}/reschedule/` | Row-locked future-time change from `scheduled` only |
+| `POST` | `/api/events/{id}/channel/` | Row-locked SMS/Voice change from `scheduled` only |
 | `POST` | `/api/events/{id}/cancel/` | Row-locked cancellation from `scheduled` only |
 
-Basic authentication is first so unauthenticated API requests receive `401`; session authentication also supports the Django-admin/browser context. Basic authentication is limited to this exercise/testing surface and requires TLS. A production deployment must explicitly choose session-based browser access or a managed/token authentication design. There is no registration, login-token issuance, phone-management, or verification endpoint in this slice.
+Basic authentication is first so unauthenticated API requests receive `401`; session authentication also supports the Django-admin/browser context. Basic authentication is limited to this exercise/testing surface and requires TLS. A production deployment must explicitly choose session-based browser access or a managed/token authentication design. There is no registration or login-token issuance endpoint.
 
-Serializers expose lifecycle timestamps, status, channel, ZIP code, demo state, and phone record ID. Full phone numbers, rendered announcements, weather audit payloads, delivery attempts, and provider identifiers are outside this user-facing representation. Creation is delegated to a transactional application service that re-locks and revalidates the verified phone immediately before saving. Cancellation uses the same event row-locking service as administrative workflows.
+Serializers expose lifecycle timestamps, status, channel, ZIP code, demo state, and phone record ID. Full phone numbers, rendered announcements, weather audit payloads, delivery attempts, and provider identifiers are outside this user-facing representation. Creation is delegated to a transactional application service that re-locks and revalidates the verified phone immediately before saving. Dedicated reschedule, channel-change, and cancellation services reload the owned event under a row lock and reject any state other than `scheduled`. Only the requested time or channel is saved; no provider call, attempt, or lifecycle transition occurs.
 
 Django Admin retains operational visibility with lifecycle fields read-only. Its controlled bulk-cancel action calls the cancellation service and skips events that are no longer scheduled rather than assigning statuses directly.
+
+### Authenticated phone API
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| `GET` | `/api/phones/` | Paginated phone records owned by the authenticated user |
+| `POST` | `/api/phones/` | Enroll one unverified E.164 phone record |
+| `POST` | `/api/phones/{id}/verification/start/` | Start an SMS Verify challenge for one owned unverified phone |
+| `POST` | `/api/phones/{id}/verification/check/` | Check a 4–10 digit code and mark the phone verified only on approval |
+
+Phone enrollment accepts the full number as a write-only value. Representations return only a masked number, local verification state, and audit timestamps. The verification actions return normalized status and safe phone metadata without codes, provider SIDs, raw payloads, or credentials. Duplicate enrollment uses the same generic validation error whether the existing globally unique number belongs to the caller or another user.
+
+The views delegate ownership and verification behavior to application services and construct the Twilio adapter only after an owned unverified record is established. Provider calls remain outside database transactions; an approved check then row-locks the phone before setting `verified_at`. Separate cache-backed DRF throttle scopes default to `3/hour` for starts and `10/hour` for checks. These throttles are approximate and process-local with the current cache configuration.
 
 ## Service Boundaries
 
@@ -156,7 +171,7 @@ Output: a project-owned result with `pending`, `approved`, or `rejected` status 
 
 The current adapter uses [Twilio Verify's Verification and Verification Check resources](https://www.twilio.com/docs/verify/api/verification). Twilio owns OTP generation, challenge state, expiry, and attempt counters. The application stores no OTP and marks `verified_at` only after an `approved` check. Provider errors are translated into safe project exceptions for invalid input, blocked attempts, expiry, authentication, rate limits, timeouts, availability, and malformed responses.
 
-Application services call the gateway outside database transactions. After approval, the service locks the phone row and verifies that its number has not changed before setting `verified_at`.
+Application services call the gateway outside database transactions. After approval, the service locks the phone row and verifies that its number has not changed before setting `verified_at`. Owner-scoped service entry points hide cross-user records before adapter calls and make checks idempotent after verification.
 
 ### Message sender
 
@@ -188,7 +203,7 @@ Twilio SDK logging is pinned to `WARNING` so its request/response diagnostics ca
 
 `run_delivery_worker` long-polls continuously or once with `--once`. A scheduler tick publishes one bounded oldest-first set of IDs. Publication does not claim or mutate events, eliminating a claimed-before-publish loss window; a failed or repeated tick can publish duplicates, which worker row locking handles. Real queue delivery requires `DELIVERY_REAL_WORKER_ENABLED=true` and `--allow-real-delivery`.
 
-`infra/aws/phase8-queue.yaml` defines the Standard queue, encrypted 14-day DLQ, three-receive redrive policy, 120-second visibility timeout, 20-second long polling, disabled-by-default one-minute EventBridge Scheduler, least-privilege scheduler role, and CloudWatch alarms for DLQ depth and queue age. It is a focused transport template, not a deployed environment or full ECS/RDS stack.
+`infra/aws/phase8-queue.yaml` defines the deployed Standard queue, encrypted 14-day DLQ, three-receive redrive policy, 120-second visibility timeout, 20-second long polling, disabled one-minute EventBridge Scheduler, least-privilege scheduler role, and CloudWatch alarms for DLQ depth and queue age. It remains a focused transport stack separate from ECS/RDS.
 
 ### Voice status callbacks
 

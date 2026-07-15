@@ -8,11 +8,17 @@ The project has a working Django foundation, domain models, a bounded local due-
 
 Phase 9 adds a minimal authenticated DRF event API. Basic and session authentication protect every `/api/events/` operation. Users can create demo events for their own verified phone record, list and retrieve only their events, and cancel an owned `scheduled` event through the row-locking service. Cross-user identifiers return `404`; lifecycle conflicts return `409`. Creation requires an explicit ISO 8601 offset and normalizes to UTC. API representations expose a phone record ID rather than a full number and omit attempts, rendered messages, weather audit payloads, and provider identifiers.
 
-Phase 10 adds deployment-ready AWS artifacts without creating live resources. `phase10-ecr.yaml` defines an immutable, scan-on-push ECR repository with bounded retention and a shared SNS alarm topic. `phase10-application.yaml` defines the two-AZ VPC layout, public TLS ALB, private Fargate web/worker/migration tasks, private encrypted RDS PostgreSQL, Secrets Manager injection, least-privilege task roles, retained log groups, basic alarms, and optional Route 53 alias. The Phase 8 queue template now accepts the shared alarm topic and exports the Scheduler name.
+Phase 11 adds dedicated owner-scoped actions to reschedule a pending event and switch it between SMS and Voice. Both services reload the authoritative event under a row lock, accept only `scheduled` events, and save only the requested field. Rescheduling requires a strictly future datetime with an explicit offset and normalizes it to UTC. The actions return `404` for missing or cross-owner IDs, `400` for invalid payloads, and `409` for lifecycle conflicts. They do not create attempts, change lifecycle state, or involve provider calls.
 
-AWS bootstrap has begun in `us-east-1` using the non-root `wakeupcall` IAM user. All templates passed AWS-side validation. A DNS-validated ACM certificate for `wakeupcall.afam.app` has been requested and is pending its Cloudflare validation CNAME. No CloudFormation stack, image, queue, ECS task, RDS instance, or Scheduler has been created or enabled yet.
+Phase 12 adds authenticated phone enrollment, listing, verification-start, and verification-check endpoints. Enrollment accepts an E.164 number as write-only input and returns masked phone metadata. Verification actions are owner-scoped, expose only normalized status, and never return codes or provider SIDs. Duplicate numbers use the same safe validation response across owners; approved checks set `verified_at`, rejected checks leave it unset, and checks are idempotent after approval. Separate per-user DRF throttle scopes default to three starts and ten checks per hour.
 
-All ECS task definitions use one immutable image. Web runs Gunicorn, worker runs the existing SQS command, and migration is an explicit one-shot task. Web/worker desired counts default to zero, the Scheduler remains disabled, and real worker delivery defaults off. Production settings accept discrete database fields so ECS can inject only the RDS-managed password JSON key instead of resolving a credential into task-definition plaintext. `docs/deployment.md` sequences validation, image publication, queue deployment, zero-capacity application deployment, secret configuration, migration, demo verification, service start, and Scheduler enablement.
+Phase 10 is live in the staging AWS account in `us-east-1`. The `wakeup-call-staging-foundation`, `wakeup-call-staging-queue`, and `wakeup-call-staging-application` CloudFormation stacks create the immutable ECR repository, shared SNS alarm topic, encrypted SQS/DLQ transport, two-AZ VPC, public TLS ALB, private Fargate tasks, private encrypted RDS PostgreSQL, Secrets Manager configuration, retained log groups, and basic alarms. Cloudflare DNS routes `wakeupcall.afam.app` to the ALB, and the ACM certificate is issued.
+
+Image commit `b1d7d4fb93a689e17e3f2ce2e0518b80c364c375` was built for `linux/amd64`, pushed under its full commit tag, and deployed to all task definitions. The migration task completed with exit code 0. Web and worker are each steady at one running task, the ALB target is healthy, and `https://wakeupcall.afam.app/health/` returns HTTP 200. Provider configuration is stored in the generated application secret; Voice remains unset because `TWILIO_VOICE_FROM_NUMBER` has not been configured.
+
+The SNS email subscription is confirmed and received an intentional non-sensitive test notification. The one-minute EventBridge Scheduler is enabled. An automatic tick processed the deterministic staging scenarios with the real-delivery gate still false: six due demo events became `suppressed`, four missed demo events failed locally, four due real events remained `scheduled`, and no demo attempt had a provider SID. The queue drained afterward and all five alarms remained `OK`.
+
+All ECS task definitions use one immutable image. Web runs Gunicorn, worker runs the existing SQS command, and migration is an explicit one-shot task. The templates default web/worker capacity to zero, Scheduler to disabled, and real worker delivery to false; the verified staging rollout now runs web/worker at one task each with Scheduler enabled and real delivery still false. Production settings accept discrete database fields so ECS can inject only the RDS-managed password JSON key instead of resolving a credential into task-definition plaintext. `docs/deployment.md` sequences validation, image publication, queue deployment, zero-capacity application deployment, secret configuration, migration, demo verification, service start, and Scheduler enablement.
 
 The ALB health check is handled by narrow first middleware only when the path is `/health/` and the documented ALB user agent is present. This permits the ALB's private-IP `Host` header without weakening the public-domain `ALLOWED_HOSTS` policy or treating redirects/errors as healthy.
 
@@ -28,49 +34,58 @@ Phase 8 adds strict version-1 queue envelopes for `dispatch_due_events` ticks an
 
 The worker retries only explicitly retryable failures that occur before entering `MessageSender`. A retrying event remains `processing`, the failed attempt is immutable, and the original SQS message receives bounded exponential visibility delay. On the third receive the event becomes failed with `RetryExhausted:*` and the message remains for DLQ redrive. Permanent pre-send failures and all sender-boundary exceptions are audited and acknowledged; sender failures are never automatically replayed because provider acceptance may be ambiguous.
 
-`infra/aws/phase8-queue.yaml` defines an encrypted Standard queue and 14-day DLQ, three-receive redrive, 20-second long polling, 120-second visibility, a disabled-by-default one-minute EventBridge Scheduler, least-privilege scheduler IAM, and CloudWatch alarms for DLQ depth and oldest-message age. The template is not deployed, and it does not include the Phase 10 ECS/RDS/ALB environment.
+`infra/aws/phase8-queue.yaml` defines the deployed encrypted Standard queue and 14-day DLQ, three-receive redrive, 20-second long polling, 120-second visibility, a disabled-by-default one-minute EventBridge Scheduler, least-privilege scheduler IAM, and CloudWatch alarms for DLQ depth and oldest-message age. The queue remains a separate transport stack from the Phase 10 ECS/RDS/ALB environment.
 
 `POST /twilio/voice/status/` validates Twilio signatures against the configured canonical HTTPS callback URL. It maps signed Call SID, Call Status, and Sequence Number fields into normalized attempt-level provider status. Sequence numbers make duplicates and out-of-order callbacks no-ops, terminal provider outcomes cannot regress, and the local event remains `submitted`.
 
-The most recent Phase 10 validation result is:
+The most recent Phase 12 validation result is:
 
 - `python manage.py check`: passed with a temporary SQLite override
 - `python manage.py makemigrations --check`: passed; no model migration required
-- `pytest`: 227 passed, 3 PostgreSQL-only tests skipped with a temporary SQLite override
-- `docker compose run --rm web pytest`: 230 passed against PostgreSQL, including existing queue/cancellation races
+- `pytest`: 286 passed, 5 PostgreSQL-only tests skipped with a temporary SQLite override
+- `docker compose run --rm web pytest`: 291 passed against PostgreSQL, including all existing concurrency coverage
 - `ruff check .`: passed
 - `docker compose config --quiet`: passed
 - `docker compose build`: passed
 - explicit `linux/amd64` production image build: passed
 - all three CloudFormation templates parsed as YAML: passed
-- `aws cloudformation validate-template`: all three templates passed in `us-east-1`; no resources were created
+- `aws cloudformation validate-template`: all three templates passed in `us-east-1`
+- staging migration task: exit code 0
+- staging ECS services: web 1/1 and worker 1/1, both steady
+- staging ALB target: healthy
+- public TLS health: HTTP 200 at `https://wakeupcall.afam.app/health/`
+- demo-only SQS exercise: six due demo events became `suppressed`, four missed demo events became `failed`, four due real events remained `scheduled`, and all 17 demo attempts had no provider SID
+- SNS alarm email: confirmed; intentional test notification received
+- CloudWatch alarms: all five `OK`
+- EventBridge Scheduler: `ENABLED`; automatic demo-only cycle passed
+- real worker delivery: `false`
 
-No registration, user-facing phone verification API, token issuance endpoint, SMS status callback, deployed queue, or live AWS environment exists. The user confirmed the credentialed weather smoke command succeeds. A live Twilio SMS smoke to a physical US handset reached the Messages API, returned a Message SID, and produced local `submitted` state; Twilio later reported `undelivered` with error `30034` because the US 10DLC sender is not attached to an approved A2P campaign. A second live smoke to Twilio's Virtual Phone also returned a valid Message SID and produced a fully audited local `submitted` attempt without error, providing a carrier-independent demonstration while A2P approval remains pending. Twilio Verify, Voice, and Voice callbacks have mocked coverage but have not been live-smoke-tested from this repository session.
+No registration, token issuance endpoint, browser application, or SMS status callback exists. The user confirmed the credentialed weather smoke command succeeds. A live Twilio SMS smoke to a physical US handset reached the Messages API, returned a Message SID, and produced local `submitted` state; Twilio later reported `undelivered` with error `30034` because the US 10DLC sender is not attached to an approved A2P campaign. A second live smoke to Twilio's Virtual Phone also returned a valid Message SID and produced a fully audited local `submitted` attempt without error, providing a carrier-independent demonstration while A2P approval remains pending. Twilio Verify, Voice, and Voice callbacks have mocked coverage but have not been live-smoke-tested from this repository session.
 
 ## Next Recommended Slice
 
-Validate and deploy the Phase 10 staging environment with explicit operator authorization.
+Implement Phase 13 as a minimal server-rendered Django application using the existing services.
 
 Stop after:
 
-- choose the AWS account, region, application domain, same-region ACM certificate, Route 53 choice, alarm destination, and RDS availability/deletion settings
-- run AWS-side template validation
-- deploy foundation, queue with Scheduler disabled, and zero-capacity application stacks
-- publish one immutable production image and configure the generated application secret
-- run and verify the migration task before starting web and worker services
-- verify TLS health, logs, alarms, and one demo event end to end before enabling the Scheduler
+- add session login/logout for existing users; registration remains out of scope
+- add accessible pages for phone enrollment/verification and event list/create/detail
+- expose reschedule, channel-switch, and cancellation controls through the existing application services
+- preserve CSRF protection, owner scoping, explicit-offset/UTC clarity, and privacy-safe phone/event representations
+- distinguish ordinary-user workflows from Django staff/Admin behavior
+- add focused view/form tests and browser-level verification of the completed workflow
 
-Do not enable real worker delivery during initial deployment. Keep `EnableRealWorkerDelivery=false` until provider compliance, destinations, and cost are explicitly approved. Do not add frontend work, registration, broad account management, recurrence, provider replay, or new apps in this slice.
+Do not add registration, token issuance, a SPA, inbound Twilio commands, DTMF, recurrence, new apps, or AWS deployment changes. Do not enable real worker delivery. Phase 13 scope and exit criteria are in `docs/roadmap.md`.
 
 ## Start Here
 
 Read:
 
-1. `docs/deployment.md`
-2. `infra/aws/phase10-ecr.yaml`
-3. `infra/aws/phase8-queue.yaml`
-4. `infra/aws/phase10-application.yaml`
-5. deployment tradeoffs and known ambiguity in `docs/architecture.md`
+1. Phase 13 in `docs/roadmap.md`
+2. phone, event, and privacy invariants in `docs/domain.md`
+3. current API/service boundaries in `docs/architecture.md`
+4. `apps/accounts/` and `apps/scheduling/` services, serializers, and tests
+5. Django authentication, form, and template conventions already available in the project
 
 Run the baseline before editing:
 
@@ -86,13 +101,23 @@ ruff check .
 The owner-scoped endpoints are:
 
 ```text
+GET  /api/phones/
+POST /api/phones/
+POST /api/phones/{id}/verification/start/
+POST /api/phones/{id}/verification/check/
 GET  /api/events/
 POST /api/events/
 GET  /api/events/{id}/
+POST /api/events/{id}/reschedule/
+POST /api/events/{id}/channel/
 POST /api/events/{id}/cancel/
 ```
 
 Use Basic authentication over TLS or an authenticated Django session. Creation requires `phone_number_id`, a five-digit ZIP, an explicit-offset future `scheduled_for`, and `sms` or `voice`. Publicly created events are always demos.
+
+Rescheduling accepts only `scheduled_for`; channel switching accepts only `channel`. Both actions apply only while the event remains `scheduled` and leave all other event and attempt data unchanged.
+
+Phone enrollment accepts a full E.164 number as write-only input. Phone responses expose a masked number and verification state. Verification start/check responses expose normalized status only; start and check rates default to `3/hour` and `10/hour` per authenticated user.
 
 ## Current Manual Workflow
 
@@ -160,12 +185,13 @@ This places a real call and has not been run in this repository session. The cal
 - Twilio Verify has mocked coverage but has not been live-smoke-tested with a service SID and test number.
 - Twilio SMS API submission is live-smoke-tested to both a physical destination and Twilio's Virtual Phone. The Virtual Phone request returned a valid Message SID and a fully audited local `submitted` attempt; inbox visibility still requires operator confirmation in Twilio Console. Successful physical carrier delivery remains pending Sole Proprietor A2P 10DLC registration and campaign association for the purchased sender.
 - Twilio Voice submission and signed callbacks have mocked coverage but have not been live-smoke-tested with a public HTTPS callback URL and authorized staging number.
-- No authenticated verification endpoints or application-level verification throttles exist yet.
-- The event API relies on existing users and phone records; registration, token issuance, phone management, and verification endpoints are not exposed.
+- The API relies on existing users; registration and token issuance are not exposed.
+- DRF's cache-backed verification throttles are approximate and process-local with the current default cache. A multi-process deployment needing a strict shared abuse or billing boundary requires a shared cache or database-backed policy.
 - HTTP Basic authentication is suitable for this bounded exercise/testing surface only and requires TLS; production deployment should explicitly choose session-based browser access or a managed/token authentication design.
 - `PhoneNumber.number` is globally unique as a current assumption.
 - Direct model status assignment can bypass transition methods; application code must use services and transition methods.
 - Real queue delivery is intentionally available only behind two explicit gates and has not been live-smoke-tested; only the single-event SMS staging path has made a real request.
+- PostgreSQL `SKIP LOCKED` may defer a due event for one scheduler cycle while a pending-event mutation holds its row lock; the next tick reloads the resulting authoritative state.
 
 ## Environment Note
 

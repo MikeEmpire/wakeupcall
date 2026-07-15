@@ -82,3 +82,16 @@ class ScheduledEventSerializer(serializers.ModelSerializer):
         except DjangoValidationError as exc:
             detail = exc.message_dict if hasattr(exc, "message_dict") else exc.messages
             raise serializers.ValidationError(detail) from None
+
+
+class RescheduleScheduledEventSerializer(serializers.Serializer):
+    scheduled_for = ExplicitTimezoneDateTimeField()
+
+    def validate_scheduled_for(self, value):
+        if value <= timezone.now():
+            raise serializers.ValidationError("The scheduled time must be in the future.")
+        return value
+
+
+class ChangeScheduledEventChannelSerializer(serializers.Serializer):
+    channel = serializers.ChoiceField(choices=ScheduledEvent.Channel.choices)

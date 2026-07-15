@@ -1,6 +1,6 @@
 # Wakeup Call
 
-The project provides a production-minded Django foundation for a weather-aware wake-up call application. It includes verified one-time events, delivery auditing, a bounded local dispatcher, a versioned SQS worker boundary, WeatherAPI.com, Twilio Verify, SMS and Voice adapters, authenticated Voice callbacks, PostgreSQL, Docker development services, and a lightweight health endpoint.
+The project provides a production-minded Django application for scheduling weather-aware SMS and Voice wake-up events. It includes verified one-time events, ownership-scoped APIs, delivery auditing, a bounded dispatcher, an SQS worker boundary, WeatherAPI.com, Twilio Verify, SMS and Voice adapters, authenticated Voice callbacks, PostgreSQL, Docker development services, and an AWS Fargate staging deployment.
 
 ## Local virtual-environment setup
 
@@ -37,6 +37,18 @@ docker compose up
 
 Compose runs Django at <http://localhost:8000/> and PostgreSQL in an internal service named `db`. Source code is mounted into the Django container for development reloads.
 
+## Staging deployment
+
+The staging environment is deployed in AWS `us-east-1` at <https://wakeupcall.afam.app>. Its public health check is:
+
+```text
+GET https://wakeupcall.afam.app/health/
+```
+
+The deployment uses an immutable `linux/amd64` image in ECR, an HTTPS ALB, private Fargate web and worker tasks, private RDS PostgreSQL, SQS with a DLQ, EventBridge Scheduler, Secrets Manager, CloudWatch logs and alarms, and a confirmed SNS alarm-email subscription. The one-minute Scheduler is enabled, but queued real-provider delivery remains disabled. Automatic staging ticks process demo events through the complete weather/render/audit path and suppress Twilio submission.
+
+The ordered rollout, secret handling, migration task, safety gates, validation, rollback, and teardown process are documented in [`docs/deployment.md`](docs/deployment.md). The templates create billable resources; keep real delivery disabled unless destinations, provider compliance, and cost have been explicitly approved.
+
 ## Environment configuration
 
 Settings default to `config.settings.development`. Production processes must use `config.settings.production` and provide `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, and either `DATABASE_URL` or the discrete `DATABASE_HOST`, `DATABASE_NAME`, `DATABASE_USER`, and `DATABASE_PASSWORD` settings used by ECS secret injection.
@@ -67,10 +79,12 @@ The minimal owner-scoped API supports:
 GET  /api/events/
 POST /api/events/
 GET  /api/events/{id}/
+POST /api/events/{id}/reschedule/
+POST /api/events/{id}/channel/
 POST /api/events/{id}/cancel/
 ```
 
-Use Django session authentication or, for exercise/testing clients, HTTP Basic authentication over TLS. Basic authentication is not the final production identity design. There is intentionally no registration or token-issuance endpoint. A create request references an existing verified phone record owned by the user:
+Use Django session authentication or, for exercise/testing clients, HTTP Basic authentication over TLS. Basic authentication is not the final production identity design. There is intentionally no registration or token-issuance endpoint. Django staff and superusers use the standard Admin at `/admin/`; ordinary authenticated users can access only their own API events. A create request references an existing verified phone record owned by the user:
 
 ```json
 {
@@ -82,6 +96,31 @@ Use Django session authentication or, for exercise/testing clients, HTTP Basic a
 ```
 
 API-created events are always demos. Datetimes require an explicit offset and are returned in UTC. Representations contain phone record IDs, not full phone numbers or delivery message bodies.
+
+Pending events can be rescheduled or switched between SMS and Voice with dedicated payloads:
+
+```json
+{"scheduled_for": "2026-07-17T14:30:00-07:00"}
+```
+
+```json
+{"channel": "voice"}
+```
+
+These actions work only while the event is `scheduled`; they do not change its destination, ZIP code, demo state, lifecycle state, or delivery audit.
+
+## Authenticated phone API
+
+Existing users can enroll and verify their own phone records:
+
+```text
+GET  /api/phones/
+POST /api/phones/
+POST /api/phones/{id}/verification/start/
+POST /api/phones/{id}/verification/check/
+```
+
+Enrollment accepts an E.164 number, such as `{"number": "+14155552671"}`. Responses expose the record ID, masked number, and verification state; the full number is write-only. Verification checks accept `{"code": "123456"}` and never echo the code or provider identifiers. Start and check actions are throttled per authenticated user, with defaults of `3/hour` and `10/hour` configurable through `PHONE_VERIFICATION_START_RATE` and `PHONE_VERIFICATION_CHECK_RATE`.
 
 Process a due demo event with deterministic fake weather:
 
@@ -107,9 +146,7 @@ python manage.py publish_due_events
 python manage.py run_delivery_worker
 ```
 
-Use `run_delivery_worker --once` for one bounded poll. Configure `AWS_REGION`, `DELIVERY_QUEUE_URL`, and `WEATHER_API_KEY`. Queue processing is demo-only by default. Real queued SMS/Voice requires both `DELIVERY_REAL_WORKER_ENABLED=true` and `--allow-real-delivery` on the worker. The queue resources are defined in `infra/aws/phase8-queue.yaml`; deployment-ready ECR and ECS/RDS/ALB templates are in `infra/aws/phase10-ecr.yaml` and `infra/aws/phase10-application.yaml`.
-
-The ordered AWS rollout, secret handling, migration task, safety gates, validation, and teardown process are documented in [`docs/deployment.md`](docs/deployment.md). The templates create billable resources when deployed; no live AWS deployment is performed by local validation.
+Use `run_delivery_worker --once` for one bounded poll. Configure `AWS_REGION`, `DELIVERY_QUEUE_URL`, and `WEATHER_API_KEY`. Queue processing is demo-only by default. Real queued SMS/Voice requires both `DELIVERY_REAL_WORKER_ENABLED=true` and `--allow-real-delivery` on the worker. The deployed queue resources are defined in `infra/aws/phase8-queue.yaml`; ECR and ECS/RDS/ALB resources are defined in `infra/aws/phase10-ecr.yaml` and `infra/aws/phase10-application.yaml`.
 
 With `WEATHER_API_KEY` configured, smoke-test the real weather adapter without creating or delivering an event:
 
@@ -147,4 +184,4 @@ Run the same commands in Docker by prefixing them with `docker compose run --rm 
 
 ## Current boundaries
 
-User-facing phone verification endpoints, registration, token issuance, and frontend features are deferred. AWS deployment artifacts exist but have not been deployed by this repository session. Real SMS and Voice require explicit gates; the callback route is provider-only, and API-created events remain demo-only.
+Registration, token issuance, inbound SMS commands, DTMF/speech interaction, and frontend features are not implemented yet. The staging AWS environment is live with automatic demo processing, but real queued SMS and Voice remain explicitly gated off. The Voice callback route is provider-only, API-created events remain demo-only, and a Twilio provider acceptance result is never described as final carrier delivery.

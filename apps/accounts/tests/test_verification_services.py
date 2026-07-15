@@ -8,7 +8,9 @@ from django.utils import timezone
 from apps.accounts.models import PhoneNumber
 from apps.accounts.services import (
     check_phone_verification,
+    check_user_phone_verification,
     start_phone_verification,
+    start_user_phone_verification,
 )
 from apps.accounts.verification import VerificationResult, VerificationStatus
 from apps.accounts.verification_exceptions import (
@@ -141,3 +143,25 @@ def test_changed_phone_is_not_marked_verified(phone_number):
 
     phone_number.refresh_from_db()
     assert phone_number.verified_at is None
+
+
+@pytest.mark.django_db
+def test_user_scoped_verification_services_hide_other_users_phone(phone_number):
+    other_user = get_user_model().objects.create_user(username="other-user")
+    gateway = Mock()
+
+    with pytest.raises(PhoneNumber.DoesNotExist):
+        start_user_phone_verification(
+            phone_number.id,
+            user=other_user,
+            gateway=gateway,
+        )
+    with pytest.raises(PhoneNumber.DoesNotExist):
+        check_user_phone_verification(
+            phone_number.id,
+            "123456",
+            user=other_user,
+            gateway=gateway,
+        )
+
+    gateway.assert_not_called()

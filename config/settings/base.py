@@ -113,6 +113,14 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
+    "DEFAULT_THROTTLE_RATES": {
+        "phone_verification_start": env(
+            "PHONE_VERIFICATION_START_RATE", default="3/hour"
+        ),
+        "phone_verification_check": env(
+            "PHONE_VERIFICATION_CHECK_RATE", default="10/hour"
+        ),
+    },
 }
 CORS_ALLOWED_ORIGINS = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])
 

@@ -18,7 +18,11 @@ from apps.delivery.services import (
     process_queued_delivery,
 )
 from apps.scheduling.models import ScheduledEvent
-from apps.scheduling.services import cancel_scheduled_event
+from apps.scheduling.services import (
+    cancel_scheduled_event,
+    change_user_scheduled_event_channel,
+    reschedule_user_scheduled_event,
+)
 from apps.weather.providers import CurrentWeather
 
 pytestmark = [
@@ -102,6 +106,91 @@ def test_cancellation_and_claim_have_one_legal_winner():
         (ScheduledEvent.Status.PROCESSING, 1, 1, "lost"),
     }
     assert (event.status, attempt_count, claimed_count, cancel_result) in outcomes
+
+
+def run_reschedule(barrier, event_id, user, scheduled_for):
+    close_old_connections()
+    try:
+        barrier.wait()
+        try:
+            reschedule_user_scheduled_event(
+                event_id,
+                user=user,
+                scheduled_for=scheduled_for,
+            )
+        except ValidationError:
+            return "lost"
+        return "rescheduled"
+    finally:
+        close_old_connections()
+
+
+def test_reschedule_and_cancellation_have_one_legal_winner():
+    event = create_due_event()
+    barrier = Barrier(2)
+    future_time = timezone.now() + timedelta(hours=1)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reschedule_future = executor.submit(
+            run_reschedule, barrier, event.id, event.user, future_time
+        )
+        cancel_future = executor.submit(run_cancel, barrier, event.id)
+        reschedule_result = reschedule_future.result()
+        cancel_result = cancel_future.result()
+
+    event.refresh_from_db()
+    outcomes = {
+        (ScheduledEvent.Status.SCHEDULED, future_time, "rescheduled", "lost"),
+        (ScheduledEvent.Status.CANCELLED, event.scheduled_for, "lost", "cancelled"),
+    }
+    assert (event.status, event.scheduled_for, reschedule_result, cancel_result) in outcomes
+    assert DeliveryAttempt.objects.filter(event=event).count() == 0
+
+
+def run_channel_change(barrier, event_id, user):
+    close_old_connections()
+    try:
+        barrier.wait()
+        try:
+            change_user_scheduled_event_channel(
+                event_id,
+                user=user,
+                channel=ScheduledEvent.Channel.VOICE,
+            )
+        except ValidationError:
+            return "lost"
+        return "changed"
+    finally:
+        close_old_connections()
+
+
+def test_channel_change_and_claim_have_one_legal_winner():
+    event = create_due_event()
+    barrier = Barrier(2)
+    now = timezone.now()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        channel_future = executor.submit(
+            run_channel_change, barrier, event.id, event.user
+        )
+        claim_future = executor.submit(run_claim, barrier, now)
+        channel_result = channel_future.result()
+        claimed_count = claim_future.result()
+
+    event.refresh_from_db()
+    attempt_count = DeliveryAttempt.objects.filter(event=event).count()
+    outcomes = {
+        (ScheduledEvent.Status.SCHEDULED, ScheduledEvent.Channel.VOICE, "changed", 0, 0),
+        (ScheduledEvent.Status.PROCESSING, ScheduledEvent.Channel.SMS, "lost", 1, 1),
+        (ScheduledEvent.Status.PROCESSING, ScheduledEvent.Channel.VOICE, "changed", 1, 1),
+    }
+    assert (
+        event.status,
+        event.channel,
+        channel_result,
+        claimed_count,
+        attempt_count,
+    ) in outcomes
 
 
 def run_queued_delivery(barrier, event_id, weather_provider, demo_sender):

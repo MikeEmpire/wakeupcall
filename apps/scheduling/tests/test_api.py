@@ -89,6 +89,8 @@ def create_event(user, phone, **overrides):
         ("post", "scheduling:event-list", {}),
         ("get", "scheduling:event-detail", {"event_id": 1}),
         ("post", "scheduling:event-cancel", {"event_id": 1}),
+        ("post", "scheduling:event-reschedule", {"event_id": 1}),
+        ("post", "scheduling:event-channel", {"event_id": 1}),
     ],
 )
 def test_event_api_requires_authentication(method, url_name, kwargs):
@@ -270,6 +272,174 @@ def test_retrieve_and_cancel_hide_other_users_event(
     assert retrieve.status_code == 404
     assert cancel.status_code == 404
     assert event.status == ScheduledEvent.Status.SCHEDULED
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("url_name", "payload"),
+    [
+        ("scheduling:event-reschedule", {"scheduled_for": "2030-01-01T12:00:00Z"}),
+        ("scheduling:event-channel", {"channel": ScheduledEvent.Channel.VOICE}),
+    ],
+)
+def test_pending_changes_hide_missing_and_other_users_events(
+    api_client,
+    other_user,
+    other_phone,
+    url_name,
+    payload,
+):
+    event = create_event(other_user, other_phone)
+
+    other_response = api_client.post(
+        reverse(url_name, kwargs={"event_id": event.id}), payload, format="json"
+    )
+    missing_response = api_client.post(
+        reverse(url_name, kwargs={"event_id": event.id + 1000}), payload, format="json"
+    )
+
+    event.refresh_from_db()
+    assert other_response.status_code == 404
+    assert missing_response.status_code == 404
+    assert event.status == ScheduledEvent.Status.SCHEDULED
+
+
+@pytest.mark.django_db
+def test_reschedule_owned_event_normalizes_to_utc_and_changes_only_time(
+    api_client, api_user, verified_phone
+):
+    event = create_event(api_user, verified_phone)
+    original_values = (event.phone_number_id, event.zip_code, event.channel, event.is_demo)
+    supplied = (datetime.now(UTC) + timedelta(hours=2)).astimezone(
+        datetime_timezone(timedelta(hours=3))
+    )
+
+    response = api_client.post(
+        reverse("scheduling:event-reschedule", kwargs={"event_id": event.id}),
+        {"scheduled_for": supplied.isoformat(), "channel": "voice"},
+        format="json",
+    )
+
+    event.refresh_from_db()
+    assert response.status_code == 200
+    assert response.data["scheduled_for"].endswith("Z")
+    assert event.scheduled_for == supplied
+    assert (event.phone_number_id, event.zip_code, event.channel, event.is_demo) == (
+        original_values
+    )
+    assert event.status == ScheduledEvent.Status.SCHEDULED
+    assert event.delivery_attempts.count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "scheduled_for",
+    [None, "not-a-date", "2030-01-01T12:00:00", "2000-01-01T00:00:00Z"],
+)
+def test_reschedule_rejects_invalid_payload(
+    api_client, api_user, verified_phone, scheduled_for
+):
+    event = create_event(api_user, verified_phone)
+    original_time = event.scheduled_for
+    payload = {} if scheduled_for is None else {"scheduled_for": scheduled_for}
+
+    response = api_client.post(
+        reverse("scheduling:event-reschedule", kwargs={"event_id": event.id}),
+        payload,
+        format="json",
+    )
+
+    event.refresh_from_db()
+    assert response.status_code == 400
+    assert "scheduled_for" in response.data
+    assert event.scheduled_for == original_time
+
+
+@pytest.mark.django_db
+def test_change_owned_event_channel_changes_only_channel(
+    api_client, api_user, verified_phone
+):
+    event = create_event(api_user, verified_phone)
+    original_values = (
+        event.phone_number_id,
+        event.zip_code,
+        event.scheduled_for,
+        event.is_demo,
+    )
+
+    response = api_client.post(
+        reverse("scheduling:event-channel", kwargs={"event_id": event.id}),
+        {"channel": ScheduledEvent.Channel.VOICE, "status": "submitted"},
+        format="json",
+    )
+
+    event.refresh_from_db()
+    assert response.status_code == 200
+    assert response.data["channel"] == ScheduledEvent.Channel.VOICE
+    assert event.channel == ScheduledEvent.Channel.VOICE
+    assert (
+        event.phone_number_id,
+        event.zip_code,
+        event.scheduled_for,
+        event.is_demo,
+    ) == original_values
+    assert event.status == ScheduledEvent.Status.SCHEDULED
+    assert event.delivery_attempts.count() == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("payload", [{}, {"channel": "email"}, {"channel": None}])
+def test_change_channel_rejects_invalid_payload(
+    api_client, api_user, verified_phone, payload
+):
+    event = create_event(api_user, verified_phone)
+
+    response = api_client.post(
+        reverse("scheduling:event-channel", kwargs={"event_id": event.id}),
+        payload,
+        format="json",
+    )
+
+    event.refresh_from_db()
+    assert response.status_code == 400
+    assert "channel" in response.data
+    assert event.channel == ScheduledEvent.Channel.SMS
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("url_name", "payload"),
+    [
+        ("scheduling:event-reschedule", {"scheduled_for": "2030-01-01T12:00:00Z"}),
+        ("scheduling:event-channel", {"channel": ScheduledEvent.Channel.VOICE}),
+    ],
+)
+@pytest.mark.parametrize(
+    "event_status",
+    [
+        ScheduledEvent.Status.PROCESSING,
+        ScheduledEvent.Status.SUBMITTED,
+        ScheduledEvent.Status.FAILED,
+        ScheduledEvent.Status.SUPPRESSED,
+        ScheduledEvent.Status.CANCELLED,
+    ],
+)
+def test_pending_changes_reject_non_scheduled_event_with_conflict(
+    api_client,
+    api_user,
+    verified_phone,
+    url_name,
+    payload,
+    event_status,
+):
+    event = create_event(api_user, verified_phone, status=event_status)
+
+    response = api_client.post(
+        reverse(url_name, kwargs={"event_id": event.id}), payload, format="json"
+    )
+
+    assert response.status_code == 409
+    assert "status" in response.data
 
 
 @pytest.mark.django_db

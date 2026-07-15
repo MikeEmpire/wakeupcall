@@ -120,7 +120,7 @@ Goal: expose only the workflows required by the exercise.
 
 Registration, token issuance, phone management/verification endpoints, frontend work, and broad account APIs remain deferred.
 
-## Phase 10: AWS Deployment Artifacts — Implemented, Live Deployment Pending
+## Phase 10: AWS Deployment Artifacts — Staging Operational, Security Handoff Pending
 
 Goal: deploy the existing image and commands without changing business behavior.
 
@@ -138,12 +138,91 @@ Scope:
 
 Implemented artifacts include an immutable/scanned ECR repository, shared SNS alarm topic, the Phase 8 queue stack with optional alarm actions, and an ECS/RDS/ALB application stack. The application stack supplies distinct web, worker, and migration task definitions from one image; private application and database subnets; TLS-only application traffic; RDS-managed credentials; JSON-key Secrets Manager injection; retained logs; and basic alarms. Web and worker desired counts default to zero, real worker delivery defaults off, and the Scheduler remains disabled for the initial rollout.
 
-The operator runbook in `docs/deployment.md` sequences image publication, queue creation, zero-capacity infrastructure deployment, secret configuration, migration, health verification, service startup, and final Scheduler enablement. Local template syntax is validated. AWS-side template validation and live resource creation require an explicitly chosen account, region, domain/certificate, notification destination, and cost authorization and remain pending.
+The operator runbook in `docs/deployment.md` was followed through image publication, queue creation, zero-capacity infrastructure deployment, secret configuration, migration, health verification, service startup, alarm-email confirmation, and both manual and automatic demo-only SQS exercises. The public TLS health endpoint and ALB target are healthy, web/worker services are steady, the one-minute Scheduler is enabled, and real worker delivery remains false. Bootstrap IAM permission narrowing and an explicit ongoing-cost/teardown decision remain operations handoff items.
+
+## Completed Pending-Event Changes
+
+Goal: let an authenticated owner change the next pending wake-up time or contact method without weakening delivery concurrency guarantees.
+
+- Dedicated owner-scoped, row-locking services reschedule a `scheduled` event or switch its channel between `sms` and `voice`.
+- Dedicated API actions preserve the read-only detail resource and return `404` for hidden identifiers, `400` for invalid input, and `409` for lifecycle conflicts.
+- Rescheduled datetimes require an explicit offset and a strictly future value, then normalize to UTC.
+- Destination, ZIP code, demo state, lifecycle fields, and delivery attempts remain unchanged.
+- Functional tests cover validation, ownership, and terminal states; PostgreSQL tests cover races with cancellation and delivery claiming.
+
+## Completed Phone Enrollment and Verification API
+
+Goal: expose the existing Twilio Verify boundary as a safe authenticated ownership workflow.
+
+- Owner-scoped phone enrollment and paginated listing expose masked metadata only.
+- Dedicated verification-start and verification-check actions use the existing services and Twilio Verify adapter boundary.
+- Separate per-user throttle scopes bound challenge starts and code checks.
+- Duplicate numbers, already-verified phones, rejected or expired challenges, provider errors, and ownership boundaries have safe, tested responses.
+- Full phone numbers and codes are write-only; provider SIDs, credentials, and raw payloads remain outside API representations.
+
+## Phase 13: Minimal User Application — Next
+
+Goal: satisfy scheduling "using the app" with a small server-rendered Django workflow rather than a separate frontend stack.
+
+Scope:
+
+- Django session login/logout using the existing custom user model.
+- Pages for phone enrollment/verification and event list/create/detail.
+- Controls for reschedule, cancel, and SMS/Voice switching through the same application services used by the API.
+- CSRF protection, owner scoping, accessible form errors, UTC/offset clarity, and no delivery-attempt/provider internals in user pages.
+- A clear ordinary-user versus Django staff/Admin demonstration.
+
+Exit criteria: an existing ordinary user can complete the verified-phone and demo scheduling workflow in a browser, while staff can inspect and safely cancel through Admin. Registration, a SPA, and broad account management remain out of scope.
+
+## Phase 14: Voice DTMF Interaction — Planned
+
+Goal: satisfy the call-interaction requirement with one bounded DTMF flow; speech recognition remains optional.
+
+Before implementation, document the exact meaning of "next scheduled time" for the one-time-event model. Prefer a small menu with fixed, auditable behavior rather than open-ended speech parsing. Candidate actions are a fixed snooze that creates a new future demo event, cancellation of the owner's next pending event, and switching that next event to SMS.
+
+Scope after that decision:
+
+- Generate TwiML using `<Gather>` with a bounded timeout and digit count.
+- Add a dedicated HTTPS action webhook with Twilio signature validation.
+- Resolve actions through an attempt/event identifier and row-locked application services; never trust caller-supplied ownership data.
+- Make duplicate webhook deliveries idempotent and return safe TwiML for invalid or stale actions.
+- Keep demo events away from real provider adapters and add mocked callback tests before any live smoke.
+
+Exit criteria: one authorized live or Twilio-provided test call can exercise the documented DTMF menu, and retries cannot apply an action twice. Do not add speech recognition or inbound call scheduling.
+
+## Phase 15: Inbound SMS Controls — Planned
+
+Goal: give the text-message path equivalent bounded controls if the assignment is interpreted to require replies from both communication methods.
+
+Scope:
+
+- Add a Twilio-signed inbound SMS webhook.
+- Define a deliberately small command grammar for stop, channel switching, and changing the next pending time.
+- Resolve the user from the verified destination safely, apply changes through the Phase 11 services, and make duplicate provider requests idempotent.
+- Return short, non-sensitive TwiML responses and avoid logging message bodies or full phone numbers.
+
+Exit criteria: mocked signed requests cover every command, invalid input, unknown/unverified senders, duplicates, and lifecycle conflicts. A real inbound SMS smoke remains optional and compliance-gated.
+
+## Phase 16: Submission and Operations Polish — Planned
+
+Goal: make the implemented behavior easy to review, demonstrate, and safely operate.
+
+Scope:
+
+- Add a concise demo script covering ordinary-user ownership, Admin behavior, verification, scheduling changes, weather auditing, demo suppression, SQS processing, and CloudWatch evidence.
+- Correct all as-built documentation and clearly identify provider/compliance limitations.
+- Decide whether an authorized Voice live smoke adds useful evidence; do not make it a prerequisite for deterministic automated tests.
+- Replace the bootstrap IAM user's direct `AdministratorAccess` with bounded deployment/operator permissions.
+- Document scale-to-zero and teardown choices for NAT, ALB, ECS, and RDS costs.
+- Re-run the complete SQLite, PostgreSQL, Docker, template, and deployed health validation set.
+
+Exit criteria: a reviewer can build locally, understand the architecture and tradeoffs, run the deterministic demo, inspect the live demo environment, and distinguish provider submission from final delivery.
 
 ## Deferred Unless Time Remains
 
 - Recurring schedules and DST policy
-- DTMF or speech interaction
+- Speech recognition
+- Optional inbound-call scheduling
 - Multiple phone numbers in the user interface
 - Weather caching
 - Transactional outbox
