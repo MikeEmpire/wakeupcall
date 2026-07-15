@@ -12,6 +12,10 @@ from apps.delivery.exceptions import MissedDeliveryWindow
 from apps.delivery.messages import render_weather_announcement
 from apps.delivery.models import DeliveryAttempt
 from apps.scheduling.models import ScheduledEvent
+from apps.scheduling.services import (
+    cancel_user_scheduled_event,
+    change_user_scheduled_event_channel,
+)
 from apps.weather.providers import WeatherProvider
 
 logger = logging.getLogger(__name__)
@@ -42,6 +46,14 @@ class ClaimedDelivery:
 @dataclass(frozen=True)
 class ProviderStatusUpdate:
     attempt: DeliveryAttempt
+    applied: bool
+
+
+@dataclass(frozen=True)
+class VoiceMenuActionResult:
+    attempt: DeliveryAttempt
+    outcome: str
+    target_event_id: int | None
     applied: bool
 
 
@@ -408,6 +420,89 @@ def record_voice_status_callback(
             ]
         )
     return ProviderStatusUpdate(attempt=attempt, applied=applied)
+
+
+@transaction.atomic
+def apply_voice_menu_action(
+    *,
+    provider_sid: str,
+    digit: str,
+    completed_at=None,
+) -> VoiceMenuActionResult:
+    if digit not in {"1", "2"}:
+        raise ValidationError({"digit": "Select a supported voice menu option."})
+
+    try:
+        attempt = (
+            DeliveryAttempt.objects.select_for_update()
+            .select_related("event")
+            .get(
+                provider_sid=provider_sid,
+                event__channel=ScheduledEvent.Channel.VOICE,
+                status=DeliveryAttempt.Status.SUBMITTED,
+            )
+        )
+    except DeliveryAttempt.DoesNotExist as exc:
+        raise DeliveryAttemptNotFound(
+            "No submitted voice attempt matches this provider identifier."
+        ) from exc
+
+    if attempt.voice_action_result:
+        return VoiceMenuActionResult(
+            attempt=attempt,
+            outcome=attempt.voice_action_result,
+            target_event_id=attempt.voice_action_target_event_id,
+            applied=False,
+        )
+
+    target = (
+        ScheduledEvent.objects.select_for_update()
+        .filter(
+            user_id=attempt.event.user_id,
+            status=ScheduledEvent.Status.SCHEDULED,
+        )
+        .order_by("scheduled_for", "id")
+        .first()
+    )
+
+    if target is None:
+        outcome = DeliveryAttempt.VoiceActionResult.NO_PENDING_EVENT
+        target_event_id = None
+    elif digit == "1":
+        cancel_user_scheduled_event(
+            target.id,
+            user=attempt.event.user,
+            cancelled_at=completed_at or timezone.now(),
+        )
+        outcome = DeliveryAttempt.VoiceActionResult.CANCELLED
+        target_event_id = target.id
+    else:
+        change_user_scheduled_event_channel(
+            target.id,
+            user=attempt.event.user,
+            channel=ScheduledEvent.Channel.SMS,
+        )
+        outcome = DeliveryAttempt.VoiceActionResult.SWITCHED_TO_SMS
+        target_event_id = target.id
+
+    attempt.voice_action_digit = digit
+    attempt.voice_action_result = outcome
+    attempt.voice_action_target_event_id = target_event_id
+    attempt.voice_action_completed_at = completed_at or timezone.now()
+    attempt.save(
+        update_fields=[
+            "voice_action_digit",
+            "voice_action_result",
+            "voice_action_target_event_id",
+            "voice_action_completed_at",
+        ]
+    )
+    return VoiceMenuActionResult(
+        attempt=attempt,
+        outcome=outcome,
+        target_event_id=target_event_id,
+        applied=True,
+    )
 
 
 @transaction.atomic

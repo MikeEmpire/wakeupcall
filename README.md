@@ -170,13 +170,13 @@ python manage.py send_staging_sms_event EVENT_ID --confirm-send
 
 This command makes a real Twilio request. It rejects demo events, voice events, unconfirmed runs, and destinations other than the configured staging number. Its output and adapter logs omit full phone numbers and message bodies.
 
-For a staging voice call, also configure `TWILIO_VOICE_FROM_NUMBER`, the public canonical `TWILIO_VOICE_STATUS_CALLBACK_URL`, `TWILIO_VOICE_SMOKE_TO_NUMBER`, and `TWILIO_VOICE_SMOKE_ENABLED=true`. Then create a due non-demo voice event for that authorized number and run:
+For a staging voice call, also configure `TWILIO_VOICE_FROM_NUMBER`, the public canonical `TWILIO_VOICE_STATUS_CALLBACK_URL`, the dedicated `TWILIO_VOICE_ACTION_CALLBACK_URL`, `TWILIO_VOICE_SMOKE_TO_NUMBER`, and `TWILIO_VOICE_SMOKE_ENABLED=true`. Then create a due non-demo voice event for that authorized number and run:
 
 ```bash
 python manage.py send_staging_voice_event EVENT_ID --confirm-call
 ```
 
-Twilio signs callback requests to `POST /twilio/voice/status/`. The configured callback URL must exactly match the public HTTPS URL used by Twilio for signature validation.
+Twilio signs callback requests to `POST /twilio/voice/status/` and `POST /twilio/voice/action/`. Each configured callback URL must exactly match its public HTTPS URL. Voice TwiML offers a one-digit menu after the announcement: `1` cancels the owner’s earliest still-`scheduled` event and `2` switches it to SMS. Action retries are audited on the call attempt and cannot apply twice.
 
 Run the same commands in Docker by prefixing them with `docker compose run --rm web`.
 
@@ -190,4 +190,4 @@ Run the same commands in Docker by prefixing them with `docker compose run --rm 
 
 ## Current boundaries
 
-Registration, token issuance, inbound SMS commands, and DTMF/speech interaction are not implemented yet. The staging AWS environment is live with automatic demo processing, but real queued SMS and Voice remain explicitly gated off. The Voice callback route is provider-only, public event creation remains demo-only, and a Twilio provider acceptance result is never described as final carrier delivery.
+Registration, token issuance, inbound SMS commands, and speech interaction are not implemented yet. The staging AWS environment is live with automatic demo processing, but real queued SMS and Voice remain explicitly gated off. Voice callback routes are provider-only, public event creation remains demo-only, and a Twilio provider acceptance result is never described as final carrier delivery.

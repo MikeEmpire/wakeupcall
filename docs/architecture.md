@@ -185,7 +185,7 @@ Input: channel, E.164 destination, and rendered message.
 
 Output: a small project-owned result containing an optional provider identifier.
 
-The current `TwilioSmsSender` and `TwilioVoiceSender` support their respective channels. Both build a Twilio client with a bounded HTTP timeout, use environment-configured sender numbers, validate the returned provider SID, and map it into `DeliveryResult`. The Voice adapter generates escaped inline `<Say>` TwiML, so Twilio does not need a separate public endpoint to retrieve announcement text. Twilio SDK response objects remain inside adapters.
+The current `TwilioSmsSender` and `TwilioVoiceSender` support their respective channels. Both build a Twilio client with a bounded HTTP timeout, use environment-configured sender numbers, validate the returned provider SID, and map it into `DeliveryResult`. The Voice adapter generates escaped inline `<Say>` and one-digit `<Gather>` TwiML, so Twilio does not need a separate public endpoint to retrieve announcement text. Twilio SDK response objects remain inside adapters.
 
 Adapter failures become project-owned errors for invalid destinations or requests, authentication or configuration problems, rate limiting, provider rejection, timeout/network failures, temporary unavailability, and malformed responses. Safe success logs contain only a masked destination and provider SID; message bodies, credentials, full phone numbers, and raw provider responses are excluded.
 
@@ -216,6 +216,12 @@ Twilio SDK logging is pinned to `WARNING` so its request/response diagnostics ca
 `POST /twilio/voice/status/` is a narrow provider endpoint, not a user-facing API. CSRF is replaced by Twilio signature validation using the configured canonical HTTPS callback URL and auth token. Invalid signatures fail before payload processing. Accepted form fields are limited to Call SID, Call Status, and Sequence Number; raw bodies and phone-number callback fields are neither stored nor logged.
 
 The callback service locks the submitted voice attempt by Call SID. Newer sequence numbers advance its normalized provider status; duplicates, older callbacks, and changes after a terminal provider outcome are no-ops. An unknown SID returns `404` so Twilio can retry if a callback raced the database commit that stores the Call SID. Callback processing does not alter the event's local `submitted` state.
+
+### Voice DTMF actions
+
+`POST /twilio/voice/action/` is a separate Twilio-signed provider endpoint with its own canonical HTTPS URL. It accepts only Call SID and one gathered digit. The Call SID resolves a submitted Voice attempt and therefore its trusted owner; no ownership or target identifier is accepted from the request.
+
+The action service locks the attempt, returns any previously recorded result, then locks the owner’s earliest `scheduled` event. Digit `1` delegates to the existing cancellation service and digit `2` delegates to the existing channel-change service. The event mutation and attempt audit marker commit atomically. Concurrent duplicates serialize on the attempt row, so one action applies and later callbacks return its result. Invalid input receives bounded TwiML without mutation; unknown or stale calls receive a non-sensitive terminal prompt.
 
 ### Delivery service
 

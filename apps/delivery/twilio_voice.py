@@ -44,6 +44,7 @@ class TwilioVoiceSender:
         auth_token: str,
         from_number: str,
         status_callback_url: str,
+        action_callback_url: str,
         timeout: float = 5.0,
         client=None,
     ):
@@ -60,11 +61,20 @@ class TwilioVoiceSender:
             raise DeliveryConfigurationError(
                 "The Twilio voice status callback must be an absolute HTTPS URL."
             )
+        parsed_action_callback = urlparse(action_callback_url)
+        if (
+            parsed_action_callback.scheme != "https"
+            or not parsed_action_callback.netloc
+        ):
+            raise DeliveryConfigurationError(
+                "The Twilio voice action callback must be an absolute HTTPS URL."
+            )
         if timeout <= 0:
             raise DeliveryConfigurationError("Twilio timeout must be positive.")
 
         self.from_number = from_number
         self.status_callback_url = status_callback_url
+        self.action_callback_url = action_callback_url
         if client is None:
             http_client = TwilioHttpClient(timeout=timeout)
             client = Client(account_sid, auth_token, http_client=http_client)
@@ -77,6 +87,7 @@ class TwilioVoiceSender:
             auth_token=settings.TWILIO_AUTH_TOKEN,
             from_number=settings.TWILIO_VOICE_FROM_NUMBER,
             status_callback_url=settings.TWILIO_VOICE_STATUS_CALLBACK_URL,
+            action_callback_url=settings.TWILIO_VOICE_ACTION_CALLBACK_URL,
             timeout=settings.TWILIO_HTTP_TIMEOUT,
         )
 
@@ -84,6 +95,18 @@ class TwilioVoiceSender:
         self._validate_request(channel=channel, to=to, message=message)
         response = VoiceResponse()
         response.say(message)
+        gather = response.gather(
+            input="dtmf",
+            num_digits=1,
+            timeout=5,
+            action=self.action_callback_url,
+            method="POST",
+        )
+        gather.say(
+            "Press 1 to cancel your next scheduled wake-up. "
+            "Press 2 to receive it by text message instead."
+        )
+        response.say("No selection received. Goodbye.")
 
         try:
             call = self.calls.create(

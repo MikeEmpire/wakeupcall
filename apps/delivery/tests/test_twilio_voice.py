@@ -19,6 +19,7 @@ from apps.delivery.twilio_voice import TwilioVoiceSender
 
 CALL_SID = "CA0123456789abcdef0123456789abcdef"
 CALLBACK_URL = "https://example.test/twilio/voice/status/"
+ACTION_URL = "https://example.test/twilio/voice/action/"
 
 
 @pytest.fixture
@@ -36,6 +37,7 @@ def sender(calls):
         auth_token="secret-token",
         from_number="+14155550100",
         status_callback_url=CALLBACK_URL,
+        action_callback_url=ACTION_URL,
         timeout=3.0,
         client=client,
     )
@@ -70,6 +72,11 @@ def test_places_call_with_safe_inline_twiml_and_callbacks(sender, calls):
         "answered",
         "completed",
     ]
+    assert f'action="{ACTION_URL}"' in kwargs["twiml"]
+    assert 'input="dtmf"' in kwargs["twiml"]
+    assert 'numDigits="1"' in kwargs["twiml"]
+    assert "Press 1 to cancel" in kwargs["twiml"]
+    assert "Press 2 to receive" in kwargs["twiml"]
 
 
 @pytest.mark.parametrize(
@@ -156,6 +163,7 @@ def test_rejects_malformed_call_sid(sender, calls, sid):
         {"account_sid": "", "auth_token": "", "from_number": ""},
         {"from_number": "not-e164"},
         {"status_callback_url": "http://example.test/status/"},
+        {"action_callback_url": "http://example.test/action/"},
         {"timeout": 0},
     ],
 )
@@ -165,6 +173,7 @@ def test_rejects_invalid_configuration(configuration):
         "auth_token": "token",
         "from_number": "+14155550100",
         "status_callback_url": CALLBACK_URL,
+        "action_callback_url": ACTION_URL,
     }
     values.update(configuration)
 
@@ -177,6 +186,7 @@ def test_rejects_invalid_configuration(configuration):
     TWILIO_AUTH_TOKEN="settings-token",
     TWILIO_VOICE_FROM_NUMBER="+14155550100",
     TWILIO_VOICE_STATUS_CALLBACK_URL=CALLBACK_URL,
+    TWILIO_VOICE_ACTION_CALLBACK_URL=ACTION_URL,
     TWILIO_HTTP_TIMEOUT=4.0,
 )
 def test_builds_sender_from_settings_with_bounded_timeout(monkeypatch):
@@ -194,6 +204,7 @@ def test_builds_sender_from_settings_with_bounded_timeout(monkeypatch):
         http_client=http_client_class.return_value,
     )
     assert sender.status_callback_url == CALLBACK_URL
+    assert sender.action_callback_url == ACTION_URL
 
 
 def test_success_log_masks_destination_and_omits_announcement(sender, caplog):

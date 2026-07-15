@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 
 from twilio.request_validator import RequestValidator
 
@@ -13,11 +14,49 @@ class MalformedVoiceStatusCallback(RuntimeError):
     pass
 
 
+class MalformedVoiceActionCallback(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class VoiceStatusCallback:
     provider_sid: str
     provider_status: str
     sequence_number: int
+
+
+@dataclass(frozen=True)
+class VoiceActionCallback:
+    provider_sid: str
+    digit: str
+
+
+class TwilioVoiceActionWebhook:
+    def __init__(self, *, auth_token: str, callback_url: str, validator=None):
+        if not auth_token or not callback_url:
+            raise MalformedVoiceActionCallback(
+                "Twilio voice action validation is not configured."
+            )
+        self.callback_url = callback_url
+        self.validator = validator or RequestValidator(auth_token)
+
+    def parse(self, *, params, signature: str) -> VoiceActionCallback:
+        if not signature or not self.validator.validate(
+            self.callback_url,
+            params,
+            signature,
+        ):
+            raise InvalidTwilioSignature("Invalid Twilio webhook signature.")
+
+        provider_sid = params.get("CallSid", "")
+        digit = params.get("Digits", "")
+        if not re.fullmatch(r"CA[0-9a-fA-F]{32}", provider_sid) or not re.fullmatch(
+            r"\d", digit
+        ):
+            raise MalformedVoiceActionCallback(
+                "The voice action callback was malformed."
+            )
+        return VoiceActionCallback(provider_sid=provider_sid, digit=digit)
 
 
 class TwilioVoiceStatusWebhook:

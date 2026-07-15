@@ -75,7 +75,7 @@ Authenticated user endpoints and application-level request throttling remain par
 - Disabled-by-default staging voice command restricted to an authorized number
 - Mocked adapter, service, callback, model, and staging-command tests
 
-DTMF and speech interaction remain deferred.
+Speech interaction remains deferred.
 
 ## Completed Local Due-Event Dispatcher
 
@@ -170,23 +170,18 @@ Goal: satisfy scheduling "using the app" with a small server-rendered Django wor
 - CSRF, owner scoping, accessible errors, explicit-offset/UTC guidance, masking, and omission of delivery/provider internals have focused coverage.
 - Ordinary users receive only user workflows; staff receive an explicit path to the existing controlled Admin.
 
-## Phase 14: Voice DTMF Interaction — Next
+## Completed Voice DTMF Interaction
 
 Goal: satisfy the call-interaction requirement with one bounded DTMF flow; speech recognition remains optional.
 
-Before implementation, document the exact meaning of "next scheduled time" for the one-time-event model. Prefer a small menu with fixed, auditable behavior rather than open-ended speech parsing. Candidate actions are a fixed snooze that creates a new future demo event, cancellation of the owner's next pending event, and switching that next event to SMS.
+- “Next” is defined as the owner’s earliest still-`scheduled` event, ordered by time and ID.
+- Inline TwiML gathers one digit: `1` cancels that event and `2` switches it to SMS.
+- A dedicated signed webhook resolves ownership from the submitted Voice attempt and delegates to Phase 11 services.
+- Attempt-level action audit fields make sequential and concurrent webhook retries idempotent.
+- Invalid, unknown, stale, and no-pending-event cases return safe bounded TwiML with no unintended mutation.
+- Mocked adapter, signature, lifecycle, ownership, duplicate, and PostgreSQL concurrency tests precede any live smoke.
 
-Scope after that decision:
-
-- Generate TwiML using `<Gather>` with a bounded timeout and digit count.
-- Add a dedicated HTTPS action webhook with Twilio signature validation.
-- Resolve actions through an attempt/event identifier and row-locked application services; never trust caller-supplied ownership data.
-- Make duplicate webhook deliveries idempotent and return safe TwiML for invalid or stale actions.
-- Keep demo events away from real provider adapters and add mocked callback tests before any live smoke.
-
-Exit criteria: one authorized live or Twilio-provided test call can exercise the documented DTMF menu, and retries cannot apply an action twice. Do not add speech recognition or inbound call scheduling.
-
-## Phase 15: Inbound SMS Controls — Planned
+## Phase 15: Inbound SMS Controls — Next
 
 Goal: give the text-message path equivalent bounded controls if the assignment is interpreted to require replies from both communication methods.
 

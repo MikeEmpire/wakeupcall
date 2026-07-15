@@ -31,6 +31,11 @@ class DeliveryAttempt(models.Model):
         ProviderStatus.CANCELED,
     }
 
+    class VoiceActionResult(models.TextChoices):
+        CANCELLED = "cancelled", "Cancelled next event"
+        SWITCHED_TO_SMS = "switched_to_sms", "Switched next event to SMS"
+        NO_PENDING_EVENT = "no_pending_event", "No pending event"
+
     event = models.ForeignKey(
         "scheduling.ScheduledEvent",
         on_delete=models.CASCADE,
@@ -52,6 +57,14 @@ class DeliveryAttempt(models.Model):
     )
     provider_status_sequence = models.PositiveIntegerField(blank=True, null=True)
     provider_status_updated_at = models.DateTimeField(blank=True, null=True)
+    voice_action_digit = models.CharField(max_length=1, blank=True)
+    voice_action_result = models.CharField(
+        max_length=20,
+        choices=VoiceActionResult.choices,
+        blank=True,
+    )
+    voice_action_target_event_id = models.PositiveBigIntegerField(blank=True, null=True)
+    voice_action_completed_at = models.DateTimeField(blank=True, null=True)
     error_code = models.CharField(max_length=64, blank=True)
     error_message = models.TextField(blank=True)
     started_at = models.DateTimeField(auto_now_add=True)

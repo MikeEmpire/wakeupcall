@@ -14,6 +14,8 @@ Phase 12 adds authenticated phone enrollment, listing, verification-start, and v
 
 Phase 13 adds a responsive server-rendered Django application for existing users. Session-authenticated pages cover phone enrollment/verification and event list/create/detail. Pending events can be rescheduled, switched between SMS and Voice, or cancelled through the same locking services used by the API. All browser mutations are POST-only and CSRF-protected. Schedule forms require an explicit ISO 8601 offset, phone data is masked, delivery/provider internals remain absent, and only staff receive an Admin navigation link.
 
+Phase 14 adds a signed one-digit Voice menu after real announcements. `1` cancels the call owner’s earliest still-`scheduled` event and `2` switches it to SMS. The signed action webhook derives ownership from the submitted attempt’s Call SID, locks the attempt and target event, delegates to Phase 11 services, and records the digit, normalized result, target ID, and completion time atomically. Duplicate and concurrent callbacks return the stored result without applying another action; invalid, stale, and no-pending-event cases return safe TwiML.
+
 Phase 10 is live in the staging AWS account in `us-east-1`. The `wakeup-call-staging-foundation`, `wakeup-call-staging-queue`, and `wakeup-call-staging-application` CloudFormation stacks create the immutable ECR repository, shared SNS alarm topic, encrypted SQS/DLQ transport, two-AZ VPC, public TLS ALB, private Fargate tasks, private encrypted RDS PostgreSQL, Secrets Manager configuration, retained log groups, and basic alarms. Cloudflare DNS routes `wakeupcall.afam.app` to the ALB, and the ACM certificate is issued.
 
 Image commit `b1d7d4fb93a689e17e3f2ce2e0518b80c364c375` was built for `linux/amd64`, pushed under its full commit tag, and deployed to all task definitions. The migration task completed with exit code 0. Web and worker are each steady at one running task, the ALB target is healthy, and `https://wakeupcall.afam.app/health/` returns HTTP 200. Provider configuration is stored in the generated application secret; Voice remains unset because `TWILIO_VOICE_FROM_NUMBER` has not been configured.
@@ -38,14 +40,15 @@ The worker retries only explicitly retryable failures that occur before entering
 
 `infra/aws/phase8-queue.yaml` defines the deployed encrypted Standard queue and 14-day DLQ, three-receive redrive, 20-second long polling, 120-second visibility, a disabled-by-default one-minute EventBridge Scheduler, least-privilege scheduler IAM, and CloudWatch alarms for DLQ depth and oldest-message age. The queue remains a separate transport stack from the Phase 10 ECS/RDS/ALB environment.
 
-`POST /twilio/voice/status/` validates Twilio signatures against the configured canonical HTTPS callback URL. It maps signed Call SID, Call Status, and Sequence Number fields into normalized attempt-level provider status. Sequence numbers make duplicates and out-of-order callbacks no-ops, terminal provider outcomes cannot regress, and the local event remains `submitted`.
+`POST /twilio/voice/status/` validates Twilio signatures against the configured canonical HTTPS callback URL. It maps signed Call SID, Call Status, and Sequence Number fields into normalized attempt-level provider status. `POST /twilio/voice/action/` independently validates its canonical URL and maps Call SID plus one digit into the bounded action service. Neither callback trusts caller-supplied ownership.
 
-The most recent Phase 13 validation result is:
+The most recent Phase 14 validation result is:
 
 - `python manage.py check`: passed with a temporary SQLite override
-- `python manage.py makemigrations --check`: passed; no model migration required
-- `pytest`: 316 passed, 5 PostgreSQL-only tests skipped with a temporary SQLite override
-- `docker compose run --rm web pytest`: 321 passed against PostgreSQL, including all existing concurrency coverage
+- `python manage.py makemigrations --check`: passed after generating the intentional `delivery.0003` Voice-action audit migration
+- `python manage.py migrate`: passed through `delivery.0003`
+- `pytest`: 328 passed, 6 PostgreSQL-only tests skipped with a temporary SQLite override
+- `docker compose run --rm web pytest`: 334 passed against PostgreSQL, including concurrent Voice-action idempotency
 - `ruff check .`: passed
 - `docker compose config --quiet`: passed
 - `docker compose build`: passed
@@ -67,27 +70,27 @@ No registration, token issuance endpoint, or SMS status callback exists. The use
 
 ## Next Recommended Slice
 
-Implement Phase 14 as one bounded Voice DTMF interaction after documenting the exact meaning of “next scheduled time.”
+Implement Phase 15 inbound SMS controls only if the assignment requires reply controls for both communication methods.
 
 Stop after:
 
-- define one small digit menu and its auditable effects for the one-time-event model
-- generate bounded `<Gather>` TwiML and add a dedicated Twilio-signed action webhook
-- resolve actions through attempt/event identifiers and owner-safe row-locking services rather than caller-supplied ownership
-- make webhook retries idempotent and return safe TwiML for invalid, duplicate, or stale actions
-- add mocked signature, action, lifecycle, and duplicate tests before any optional live smoke
+- define a deliberately small signed command grammar for stop, SMS switching, and any approved time-change command
+- resolve ownership from the verified inbound sender rather than request-supplied user data
+- delegate event changes to the Phase 11 services and add provider-message idempotency
+- return short privacy-safe TwiML without logging message bodies or full phone numbers
+- add mocked signature, ownership, lifecycle, invalid-command, and duplicate tests
 
-Do not add speech recognition, inbound SMS, inbound-call scheduling, recurrence, registration, new apps, or AWS deployment changes. Do not enable real worker delivery. Phase 14 scope and exit criteria are in `docs/roadmap.md`.
+Do not add speech recognition, inbound-call scheduling, recurrence, registration, new apps, or enable real worker delivery. Phase 15 scope and exit criteria are in `docs/roadmap.md`.
 
 ## Start Here
 
 Read:
 
-1. Phase 14 in `docs/roadmap.md`
-2. event lifecycle and provider callback invariants in `docs/domain.md`
-3. Voice adapter/callback boundaries in `docs/architecture.md`
-4. `apps/delivery/twilio_voice.py`, `twilio_webhooks.py`, callback views, and tests
-5. Phase 11 scheduling services for any documented pending-event action
+1. Phase 15 in `docs/roadmap.md`
+2. phone ownership, event lifecycle, and privacy invariants in `docs/domain.md`
+3. the Voice signed-webhook/idempotency pattern and Phase 11 scheduling services
+4. Twilio inbound Messaging webhook fields and signature rules
+5. the exact assignment language to confirm Phase 15 is required
 
 Run the baseline before editing:
 
@@ -167,13 +170,13 @@ python manage.py send_staging_sms_event EVENT_ID --confirm-send
 
 This makes a real Twilio request. It has been run successfully through API acceptance; final carrier delivery remains blocked by Twilio A2P registration.
 
-To intentionally place one due non-demo Voice event to its explicitly authorized staging number, configure `TWILIO_VOICE_FROM_NUMBER`, the public `TWILIO_VOICE_STATUS_CALLBACK_URL`, `TWILIO_VOICE_SMOKE_TO_NUMBER`, and `TWILIO_VOICE_SMOKE_ENABLED=true`, then run:
+To intentionally place one due non-demo Voice event to its explicitly authorized staging number, configure `TWILIO_VOICE_FROM_NUMBER`, the public `TWILIO_VOICE_STATUS_CALLBACK_URL`, `TWILIO_VOICE_ACTION_CALLBACK_URL`, `TWILIO_VOICE_SMOKE_TO_NUMBER`, and `TWILIO_VOICE_SMOKE_ENABLED=true`, then run:
 
 ```bash
 python manage.py send_staging_voice_event EVENT_ID --confirm-call
 ```
 
-This places a real call and has not been run in this repository session. The callback URL must exactly match the public HTTPS URL Twilio signs.
+This places a real call and has not been run in this repository session. Both callback URLs must exactly match the public HTTPS URLs Twilio signs.
 
 ## Known Gaps
 
@@ -191,6 +194,7 @@ This places a real call and has not been run in this repository session. The cal
 - Twilio Verify has mocked coverage but has not been live-smoke-tested with a service SID and test number.
 - Twilio SMS API submission is live-smoke-tested to both a physical destination and Twilio's Virtual Phone. The Virtual Phone request returned a valid Message SID and a fully audited local `submitted` attempt; inbox visibility still requires operator confirmation in Twilio Console. Successful physical carrier delivery remains pending Sole Proprietor A2P 10DLC registration and campaign association for the purchased sender.
 - Twilio Voice submission and signed callbacks have mocked coverage but have not been live-smoke-tested with a public HTTPS callback URL and authorized staging number.
+- `TWILIO_VOICE_ACTION_CALLBACK_URL` is implemented in application settings but is not yet injected by the Phase 10 CloudFormation task definitions. Phase 16 deployment polish must add that non-secret configuration before a deployed DTMF smoke.
 - The API relies on existing users; registration and token issuance are not exposed.
 - DRF's cache-backed verification throttles are approximate and process-local with the current default cache. A multi-process deployment needing a strict shared abuse or billing boundary requires a shared cache or database-backed policy.
 - HTTP Basic authentication is suitable for this bounded exercise/testing surface only and requires TLS; production deployment should explicitly choose session-based browser access or a managed/token authentication design.

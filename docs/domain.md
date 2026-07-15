@@ -144,6 +144,7 @@ Important fields:
 - normalized weather snapshot
 - optional provider SID
 - optional normalized provider status, callback sequence, and update time
+- optional processed Voice menu digit, normalized result, target event ID, and completion time
 - sanitized error code and message
 - start and completion timestamps
 
@@ -167,6 +168,17 @@ queued / initiated --> ringing --> in_progress --> completed
 ```
 
 Callbacks carry a provider sequence number. An update is applied only when its sequence is newer than the stored sequence, and provider-terminal outcomes never regress. Exact duplicates and late older callbacks are successful no-ops. This provider outcome never rewrites the scheduled event's local `submitted` status. A `completed` voice call means audio was connected; it does not prove that a person, rather than voicemail or another system, heard the announcement.
+
+### Voice DTMF action
+
+After a real Voice announcement, callers receive one bounded menu:
+
+- `1`: cancel the owner’s next pending event
+- `2`: switch the owner’s next pending event to SMS
+
+“Next pending event” means the earliest event for the submitted call’s owner that is still in `scheduled`, ordered by `scheduled_for` and then ID. It can be overdue but not yet claimed. Ownership comes only from the submitted attempt’s event; callback parameters never supply a user or target event ID.
+
+A valid action locks the submitted Voice attempt first and records its digit, normalized result, optional target event ID, and completion time in the same transaction as the Phase 11 event mutation. Only one valid action can be recorded per call. Duplicate or concurrent callbacks return the stored result without applying another mutation. Invalid digits do not consume the action and receive a bounded reprompt. A valid action with no pending event records `no_pending_event`, making its retries idempotent.
 
 The weather snapshot is JSON because it is historical evidence with a small provider-normalized shape, not relational data used for filtering.
 
