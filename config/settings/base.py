@@ -87,6 +87,19 @@ AUTH_USER_MODEL = "accounts.User"
 REST_FRAMEWORK = {}
 CORS_ALLOWED_ORIGINS = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])
 
+WEATHER_API_KEY = env("WEATHER_API_KEY", default="")
+WEATHER_API_BASE_URL = env(
+    "WEATHER_API_BASE_URL",
+    default="https://api.weatherapi.com/v1",
+)
+WEATHER_API_CONNECT_TIMEOUT = env.float("WEATHER_API_CONNECT_TIMEOUT", default=2.0)
+WEATHER_API_READ_TIMEOUT = env.float("WEATHER_API_READ_TIMEOUT", default=5.0)
+
+TWILIO_ACCOUNT_SID = env("TWILIO_ACCOUNT_SID", default="")
+TWILIO_AUTH_TOKEN = env("TWILIO_AUTH_TOKEN", default="")
+TWILIO_VERIFY_SERVICE_SID = env("TWILIO_VERIFY_SERVICE_SID", default="")
+TWILIO_HTTP_TIMEOUT = env.float("TWILIO_HTTP_TIMEOUT", default=5.0)
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
