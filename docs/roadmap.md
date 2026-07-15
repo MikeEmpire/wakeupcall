@@ -53,34 +53,29 @@ Complete one independently testable vertical slice at a time. External services 
 
 Authenticated user endpoints and application-level request throttling remain part of the later user/API surface.
 
-## Phase 5: Twilio SMS — Next
+## Completed Twilio SMS Boundary
 
-Goal: submit non-demo SMS events through the existing delivery service.
+- Twilio SMS sender behind `MessageSender`
+- Environment-driven sender number and bounded HTTP timeout
+- Validated Twilio Message SID mapped into `DeliveryResult` and persisted by orchestration
+- Project-owned, retry-classified configuration, request, rejection, rate-limit, timeout, availability, and malformed-response errors
+- Safe masked success logging
+- Disabled-by-default staging smoke command restricted to an explicitly authorized number
+- Demo-event sender selection remains in application orchestration; smoke command rejects demo events before adapter construction
 
-Scope:
+## Completed Twilio Voice and Callback Boundary
 
-- SMS sender adapter
-- Provider configuration and secrets
-- Provider SID persistence
-- Timeout and error mapping
-- Safe logging
-- Staging smoke test using an authorized number
+- Voice sender behind `MessageSender` with bounded Twilio client timeout
+- Escaped inline TwiML and validated Call SID mapping
+- All call-progress events submitted to the configured callback URL
+- Authenticated, POST-only Twilio Voice status endpoint
+- Normalized provider-status fields separate from local attempt/event status
+- Sequence-based duplicate and out-of-order callback handling
+- Terminal provider outcomes cannot regress
+- Disabled-by-default staging voice command restricted to an authorized number
+- Mocked adapter, service, callback, model, and staging-command tests
 
-Keep demo-event selection inside the application orchestration so demo events cannot accidentally reach Twilio.
-
-## Phase 6: Twilio Voice and Callbacks
-
-Goal: add voice as a second delivery adapter and track asynchronous provider results.
-
-Scope:
-
-- Voice adapter and safe TwiML generation or endpoint
-- Twilio signature validation
-- Status callback endpoint
-- Idempotent and out-of-order callback mapping
-- Distinguish `submitted` from provider delivery outcome
-
-DTMF or speech interaction is optional follow-up scope and should not block basic voice delivery.
+DTMF and speech interaction remain deferred.
 
 ## Phase 7: Local Due-Event Dispatcher
 

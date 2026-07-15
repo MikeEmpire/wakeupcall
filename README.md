@@ -1,6 +1,6 @@
 # Wakeup Call
 
-The project provides a clean Django foundation for a weather-aware wake-up call application. It includes a custom user model, verified phone and one-time event domain models, delivery-attempt auditing, a synchronous demo-delivery workflow, WeatherAPI.com and Twilio Verify adapters, PostgreSQL configuration, Docker development services, console logging, Django REST Framework, and a lightweight health endpoint. Twilio message delivery and asynchronous processing are intentionally deferred.
+The project provides a clean Django foundation for a weather-aware wake-up call application. It includes a custom user model, verified phone and one-time event domain models, delivery-attempt auditing, a synchronous demo-delivery workflow, WeatherAPI.com, Twilio Verify, SMS, and Voice adapters, authenticated Voice status callbacks, PostgreSQL configuration, Docker development services, console logging, Django REST Framework, and a lightweight health endpoint. Asynchronous scheduling and processing are intentionally deferred.
 
 ## Local virtual-environment setup
 
@@ -75,6 +75,22 @@ python manage.py check_weather 94107
 
 The real adapter uses WeatherAPI.com and returns only the normalized location, Fahrenheit temperature, condition, and observation time used by the application.
 
+To make an intentional staging SMS submission, configure Twilio credentials, `TWILIO_SMS_FROM_NUMBER`, `TWILIO_SMS_SMOKE_TO_NUMBER`, and `TWILIO_SMS_SMOKE_ENABLED=true`. Create a due, non-demo SMS event whose verified destination exactly matches the authorized smoke number, then run:
+
+```bash
+python manage.py send_staging_sms_event EVENT_ID --confirm-send
+```
+
+This command makes a real Twilio request. It rejects demo events, voice events, unconfirmed runs, and destinations other than the configured staging number. Its output and adapter logs omit full phone numbers and message bodies.
+
+For a staging voice call, also configure `TWILIO_VOICE_FROM_NUMBER`, the public canonical `TWILIO_VOICE_STATUS_CALLBACK_URL`, `TWILIO_VOICE_SMOKE_TO_NUMBER`, and `TWILIO_VOICE_SMOKE_ENABLED=true`. Then create a due non-demo voice event for that authorized number and run:
+
+```bash
+python manage.py send_staging_voice_event EVENT_ID --confirm-call
+```
+
+Twilio signs callback requests to `POST /twilio/voice/status/`. The configured callback URL must exactly match the public HTTPS URL used by Twilio for signature validation.
+
 Run the same commands in Docker by prefixing them with `docker compose run --rm web`.
 
 ## Design and agent workflow
@@ -87,4 +103,4 @@ Run the same commands in Docker by prefixing them with `docker compose run --rm 
 
 ## Current boundaries
 
-Twilio SMS/Voice delivery, user-facing verification endpoints, queues, AWS deployment resources, registration, and frontend features are deferred to later phases. Twilio Verify is available through application services, but no public workflow exposes it yet.
+User-facing verification endpoints, schedulers, queues, AWS deployment resources, registration, and frontend features are deferred to later phases. Twilio Verify is available through application services, but no public workflow exposes it yet. Real SMS and Voice are exposed only through opt-in staging management commands; the callback route is provider-only, and there is no user-facing delivery API.

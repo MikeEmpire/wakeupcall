@@ -20,13 +20,13 @@ The repository is one Django project with four local applications:
 | --- | --- |
 | `accounts` | Custom user, owned phone numbers, verification services, and Twilio Verify adapter |
 | `scheduling` | One-time scheduled events and their lifecycle |
-| `delivery` | Delivery attempts, announcement rendering, sender boundary, and synchronous orchestration |
+| `delivery` | Delivery attempts, announcement rendering, sender boundary, Twilio SMS/Voice adapters, authenticated callback handling, and synchronous orchestration |
 | `weather` | Normalized weather value object, provider boundary, deterministic fake, and WeatherAPI.com REST adapter |
 
-The current executable flow is synchronous and demo-oriented:
+The current executable flow is synchronous. Demo events use the suppression sender; explicitly authorized staging commands can use Twilio senders for due non-demo events:
 
 ```text
-deliver_demo_event command
+demo / staging SMS / staging Voice command
           |
           v
 delivery service --atomic claim--> ScheduledEvent + DeliveryAttempt
@@ -36,8 +36,10 @@ delivery service --atomic claim--> ScheduledEvent + DeliveryAttempt
           +--> announcement renderer
           |
           +--> DemoMessageSender --> masked console log
+          |    or TwilioSmsSender --> Twilio Messages API
+          |    or TwilioVoiceSender --> Twilio Calls API
           |
-          +--atomic finalize--> suppressed attempt and event
+          +--atomic finalize--> suppressed or submitted attempt and event
 ```
 
 Key files:
@@ -46,6 +48,9 @@ Key files:
 - `apps/delivery/models.py`
 - `apps/delivery/services.py`
 - `apps/delivery/gateways.py`
+- `apps/delivery/twilio_sms.py`
+- `apps/delivery/twilio_voice.py`
+- `apps/delivery/twilio_webhooks.py`
 - `apps/weather/providers.py`
 
 ### Current transaction behavior
@@ -105,7 +110,21 @@ Input: channel, E.164 destination, and rendered message.
 
 Output: a small project-owned result containing an optional provider identifier.
 
-SMS and voice may later use separate adapters behind this capability. Twilio SDK response objects must remain inside adapters.
+The current `TwilioSmsSender` and `TwilioVoiceSender` support their respective channels. Both build a Twilio client with a bounded HTTP timeout, use environment-configured sender numbers, validate the returned provider SID, and map it into `DeliveryResult`. The Voice adapter generates escaped inline `<Say>` TwiML, so Twilio does not need a separate public endpoint to retrieve announcement text. Twilio SDK response objects remain inside adapters.
+
+Adapter failures become project-owned errors for invalid destinations or requests, authentication or configuration problems, rate limiting, provider rejection, timeout/network failures, temporary unavailability, and malformed responses. Safe success logs contain only a masked destination and provider SID; message bodies, credentials, full phone numbers, and raw provider responses are excluded.
+
+Twilio SDK logging is pinned to `WARNING` so its request/response diagnostics cannot emit account identifiers, request parameters, or raw provider responses through the project console logger.
+
+`send_staging_sms_event` is the only current real-SMS executable path. It is disabled by default and requires `TWILIO_SMS_SMOKE_ENABLED=true`, an authorized `TWILIO_SMS_SMOKE_TO_NUMBER` matching the event, and `--confirm-send`. It rejects demo and voice events before constructing the Twilio adapter and uses deterministic fake weather so the smoke test isolates SMS submission.
+
+`send_staging_voice_event` applies equivalent separate controls with `TWILIO_VOICE_SMOKE_ENABLED`, `TWILIO_VOICE_SMOKE_TO_NUMBER`, and `--confirm-call`. It rejects demo and SMS events before adapter construction.
+
+### Voice status callbacks
+
+`POST /twilio/voice/status/` is a narrow provider endpoint, not a user-facing API. CSRF is replaced by Twilio signature validation using the configured canonical HTTPS callback URL and auth token. Invalid signatures fail before payload processing. Accepted form fields are limited to Call SID, Call Status, and Sequence Number; raw bodies and phone-number callback fields are neither stored nor logged.
+
+The callback service locks the submitted voice attempt by Call SID. Newer sequence numbers advance its normalized provider status; duplicates, older callbacks, and changes after a terminal provider outcome are no-ops. An unknown SID returns `404` so Twilio can retry if a callback raced the database commit that stores the Call SID. Callback processing does not alter the event's local `submitted` state.
 
 ### Delivery service
 
@@ -141,8 +160,8 @@ Planned components:
 - SQS Standard queue with a dead-letter queue
 - EventBridge minute tick to initiate due-event dispatch
 - Real weather REST adapter with bounded timeouts (implemented locally; deployment configuration remains planned)
-- Twilio Verify adapter (implemented locally), plus planned SMS and Voice adapters
-- Authenticated Twilio status callbacks
+- Twilio Verify, SMS, and Voice adapters (implemented locally)
+- Authenticated Twilio Voice status callbacks (implemented locally)
 - CloudWatch logs, basic metrics, and alarms
 - Secrets Manager or Parameter Store for secrets
 

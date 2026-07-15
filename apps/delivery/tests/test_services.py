@@ -9,7 +9,12 @@ from django.utils import timezone
 from apps.accounts.models import PhoneNumber
 from apps.delivery.gateways import DeliveryResult
 from apps.delivery.models import DeliveryAttempt
-from apps.delivery.services import EventNotDue, deliver_scheduled_event
+from apps.delivery.services import (
+    DeliveryAttemptNotFound,
+    EventNotDue,
+    deliver_scheduled_event,
+    record_voice_status_callback,
+)
 from apps.scheduling.models import ScheduledEvent
 from apps.weather.providers import CurrentWeather
 
@@ -140,3 +145,72 @@ def test_cancelled_event_cannot_be_delivered(due_event, weather_provider):
 
     with pytest.raises(ValidationError, match="cannot be delivered"):
         deliver_scheduled_event(due_event.id, weather_provider=weather_provider)
+
+
+@pytest.mark.django_db
+def test_voice_callback_records_provider_outcome_without_changing_event_status(
+    due_event,
+    weather_provider,
+):
+    due_event.channel = ScheduledEvent.Channel.VOICE
+    due_event.is_demo = False
+    due_event.save(update_fields=["channel", "is_demo"])
+    sender = Mock()
+    provider_sid = "CA" + "0" * 32
+    sender.send.return_value = DeliveryResult(provider_sid=provider_sid)
+    attempt = deliver_scheduled_event(
+        due_event.id,
+        weather_provider=weather_provider,
+        message_sender=sender,
+    )
+
+    update = record_voice_status_callback(
+        provider_sid=provider_sid,
+        provider_status=DeliveryAttempt.ProviderStatus.COMPLETED,
+        sequence_number=3,
+    )
+
+    attempt.refresh_from_db()
+    due_event.refresh_from_db()
+    assert update.applied is True
+    assert attempt.provider_status == DeliveryAttempt.ProviderStatus.COMPLETED
+    assert attempt.provider_status_sequence == 3
+    assert due_event.status == ScheduledEvent.Status.SUBMITTED
+
+
+@pytest.mark.django_db
+def test_voice_callback_duplicate_is_idempotent(due_event, weather_provider):
+    due_event.channel = ScheduledEvent.Channel.VOICE
+    due_event.is_demo = False
+    due_event.save(update_fields=["channel", "is_demo"])
+    provider_sid = "CA" + "1" * 32
+    sender = Mock()
+    sender.send.return_value = DeliveryResult(provider_sid=provider_sid)
+    deliver_scheduled_event(
+        due_event.id,
+        weather_provider=weather_provider,
+        message_sender=sender,
+    )
+    record_voice_status_callback(
+        provider_sid=provider_sid,
+        provider_status=DeliveryAttempt.ProviderStatus.RINGING,
+        sequence_number=1,
+    )
+
+    duplicate = record_voice_status_callback(
+        provider_sid=provider_sid,
+        provider_status=DeliveryAttempt.ProviderStatus.RINGING,
+        sequence_number=1,
+    )
+
+    assert duplicate.applied is False
+
+
+@pytest.mark.django_db
+def test_voice_callback_rejects_unknown_attempt():
+    with pytest.raises(DeliveryAttemptNotFound):
+        record_voice_status_callback(
+            provider_sid="CA" + "2" * 32,
+            provider_status=DeliveryAttempt.ProviderStatus.COMPLETED,
+            sequence_number=3,
+        )

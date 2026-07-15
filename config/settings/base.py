@@ -98,7 +98,17 @@ WEATHER_API_READ_TIMEOUT = env.float("WEATHER_API_READ_TIMEOUT", default=5.0)
 TWILIO_ACCOUNT_SID = env("TWILIO_ACCOUNT_SID", default="")
 TWILIO_AUTH_TOKEN = env("TWILIO_AUTH_TOKEN", default="")
 TWILIO_VERIFY_SERVICE_SID = env("TWILIO_VERIFY_SERVICE_SID", default="")
+TWILIO_SMS_FROM_NUMBER = env("TWILIO_SMS_FROM_NUMBER", default="")
 TWILIO_HTTP_TIMEOUT = env.float("TWILIO_HTTP_TIMEOUT", default=5.0)
+TWILIO_SMS_SMOKE_ENABLED = env.bool("TWILIO_SMS_SMOKE_ENABLED", default=False)
+TWILIO_SMS_SMOKE_TO_NUMBER = env("TWILIO_SMS_SMOKE_TO_NUMBER", default="")
+TWILIO_VOICE_FROM_NUMBER = env("TWILIO_VOICE_FROM_NUMBER", default="")
+TWILIO_VOICE_STATUS_CALLBACK_URL = env(
+    "TWILIO_VOICE_STATUS_CALLBACK_URL",
+    default="",
+)
+TWILIO_VOICE_SMOKE_ENABLED = env.bool("TWILIO_VOICE_SMOKE_ENABLED", default=False)
+TWILIO_VOICE_SMOKE_TO_NUMBER = env("TWILIO_VOICE_SMOKE_TO_NUMBER", default="")
 
 LOGGING = {
     "version": 1,
@@ -118,5 +128,12 @@ LOGGING = {
     "root": {
         "handlers": ["console"],
         "level": env("DJANGO_LOG_LEVEL", default="INFO"),
+    },
+    "loggers": {
+        "twilio": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
     },
 }

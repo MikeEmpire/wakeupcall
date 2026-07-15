@@ -10,10 +10,11 @@ class DeliveryAttemptAdmin(admin.ModelAdmin):
         "event",
         "attempt_number",
         "status",
+        "provider_status",
         "provider_sid",
         "started_at",
     )
-    list_filter = ("status",)
+    list_filter = ("status", "provider_status")
     search_fields = ("event__id", "provider_sid", "event__phone_number__number")
     list_select_related = ("event", "event__phone_number")
     readonly_fields = (
@@ -23,6 +24,9 @@ class DeliveryAttemptAdmin(admin.ModelAdmin):
         "rendered_message",
         "weather_snapshot",
         "provider_sid",
+        "provider_status",
+        "provider_status_sequence",
+        "provider_status_updated_at",
         "error_code",
         "error_message",
         "started_at",

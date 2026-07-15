@@ -2,7 +2,7 @@
 
 ## Scope
 
-The current domain supports one-time weather announcements to a verified US phone number by SMS or voice. Demo delivery is wired end to end, and Twilio Verify is implemented behind an application gateway. Real SMS and voice delivery are planned.
+The current domain supports one-time weather announcements to a verified US phone number by SMS or voice. Demo delivery is wired end to end, Twilio Verify is implemented behind an application gateway, and non-demo SMS and voice events can be submitted to Twilio through opt-in staging commands. Voice call progress is recorded from authenticated Twilio callbacks.
 
 ## User
 
@@ -119,6 +119,7 @@ Important fields:
 - rendered announcement
 - normalized weather snapshot
 - optional provider SID
+- optional normalized provider status, callback sequence, and update time
 - sanitized error code and message
 - start and completion timestamps
 
@@ -132,6 +133,17 @@ processing ----> submitted
 
 Attempts do not currently retry or move between terminal states. A retry will create a new attempt number rather than rewrite historical attempt data.
 
+The attempt's local `submitted` status remains terminal and means only that Twilio accepted the create request. Voice callbacks update a separate provider-status lifecycle:
+
+```text
+queued / initiated --> ringing --> in_progress --> completed
+                         |  |             |
+                         |  +--> busy     +--> failed / canceled
+                         +-----> no_answer / failed / canceled
+```
+
+Callbacks carry a provider sequence number. An update is applied only when its sequence is newer than the stored sequence, and provider-terminal outcomes never regress. Exact duplicates and late older callbacks are successful no-ops. This provider outcome never rewrites the scheduled event's local `submitted` status. A `completed` voice call means audio was connected; it does not prove that a person, rather than voicemail or another system, heard the announcement.
+
 The weather snapshot is JSON because it is historical evidence with a small provider-normalized shape, not relational data used for filtering.
 
 ## Demo Delivery Invariant
@@ -139,6 +151,10 @@ The weather snapshot is JSON because it is historical evidence with a small prov
 A demo event follows the normal workflow through weather lookup, announcement rendering, and attempt creation. At the sender boundary it must use `DemoMessageSender`, which logs the intended message with a masked destination. It then becomes `suppressed`.
 
 Demo mode must never be implemented as an early return that skips auditing, and a demo event must never be passed to a real SMS or voice adapter.
+
+The Twilio SMS adapter returns only a validated Message SID. A successful create call moves a non-demo event to `submitted`; it does not prove handset delivery. Provider objects and raw responses stay inside the adapter. The staging smoke command additionally requires a disabled-by-default feature flag, command-line confirmation, and an event destination matching the explicitly configured authorized staging number.
+
+The Twilio Voice adapter follows the same demo restriction and returns only a validated Call SID. It generates escaped inline TwiML from the project-rendered announcement and subscribes to initiated, ringing, answered, and completed callbacks. The voice staging command uses separate disabled-by-default configuration, confirmation, and authorized-destination checks.
 
 ## Idempotency and Concurrency
 

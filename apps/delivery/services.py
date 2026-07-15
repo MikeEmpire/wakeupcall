@@ -19,10 +19,20 @@ class MessageSenderNotConfigured(RuntimeError):
     pass
 
 
+class DeliveryAttemptNotFound(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class ClaimedDelivery:
     event: ScheduledEvent
     attempt: DeliveryAttempt
+
+
+@dataclass(frozen=True)
+class ProviderStatusUpdate:
+    attempt: DeliveryAttempt
+    applied: bool
 
 
 def deliver_scheduled_event(
@@ -80,6 +90,44 @@ def deliver_scheduled_event(
         provider_sid=result.provider_sid,
         completed_at=timezone.now(),
     )
+
+
+@transaction.atomic
+def record_voice_status_callback(
+    *,
+    provider_sid: str,
+    provider_status: str,
+    sequence_number: int,
+    received_at=None,
+) -> ProviderStatusUpdate:
+    if not provider_sid.startswith("CA"):
+        raise ValidationError("A Twilio Call SID is required.")
+
+    try:
+        attempt = DeliveryAttempt.objects.select_for_update().get(
+            provider_sid=provider_sid,
+            event__channel=ScheduledEvent.Channel.VOICE,
+            status=DeliveryAttempt.Status.SUBMITTED,
+        )
+    except DeliveryAttempt.DoesNotExist as exc:
+        raise DeliveryAttemptNotFound(
+            "No submitted voice attempt matches this provider identifier."
+        ) from exc
+
+    applied = attempt.apply_provider_status(
+        provider_status,
+        sequence_number=sequence_number,
+        at=received_at,
+    )
+    if applied:
+        attempt.save(
+            update_fields=[
+                "provider_status",
+                "provider_status_sequence",
+                "provider_status_updated_at",
+            ]
+        )
+    return ProviderStatusUpdate(attempt=attempt, applied=applied)
 
 
 @transaction.atomic
