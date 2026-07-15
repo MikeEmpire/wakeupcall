@@ -142,6 +142,12 @@ def test_reschedule_and_cancellation_have_one_legal_winner():
     outcomes = {
         (ScheduledEvent.Status.SCHEDULED, future_time, "rescheduled", "lost"),
         (ScheduledEvent.Status.CANCELLED, event.scheduled_for, "lost", "cancelled"),
+        (
+            ScheduledEvent.Status.CANCELLED,
+            future_time,
+            "rescheduled",
+            "cancelled",
+        ),
     }
     assert (event.status, event.scheduled_for, reschedule_result, cancel_result) in outcomes
     assert DeliveryAttempt.objects.filter(event=event).count() == 0

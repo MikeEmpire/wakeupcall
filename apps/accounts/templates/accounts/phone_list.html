@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Phones · Wakeup Call{% endblock %}
+{% block content %}
+<div class="page-heading split-heading">
+  <div>
+    <p class="eyebrow">Delivery destinations</p>
+    <h1>Your phones</h1>
+    <p class="lede">Only verified phones can receive scheduled wake-up events.</p>
+  </div>
+  <a class="button button-primary" href="{% url 'accounts_web:phone-enroll' %}">Add phone</a>
+</div>
+
+{% if phone_rows %}
+  <div class="card-list">
+    {% for phone, masked_number in phone_rows %}
+      <article class="card row-card">
+        <div>
+          <h2>{{ masked_number }}</h2>
+          <p class="muted">Added {{ phone.created_at|date:"M j, Y" }}</p>
+        </div>
+        <div class="row-actions">
+          {% if phone.is_verified %}
+            <span class="badge badge-success">Verified</span>
+          {% else %}
+            <span class="badge badge-warning">Needs verification</span>
+            <a class="button button-secondary" href="{% url 'accounts_web:phone-verify' phone.id %}">Verify</a>
+          {% endif %}
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+{% else %}
+  <section class="empty-state card">
+    <div class="empty-icon" aria-hidden="true">☎</div>
+    <h2>No phones yet</h2>
+    <p>Enroll a phone and verify ownership before scheduling your first event.</p>
+    <a class="button button-primary" href="{% url 'accounts_web:phone-enroll' %}">Add your first phone</a>
+  </section>
+{% endif %}
+{% endblock %}

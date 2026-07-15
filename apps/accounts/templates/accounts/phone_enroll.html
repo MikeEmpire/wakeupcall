@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Add phone · Wakeup Call{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <a class="back-link" href="{% url 'accounts_web:phone-list' %}">← Back to phones</a>
+  <p class="eyebrow">Delivery destination</p>
+  <h1>Add a phone</h1>
+  <p class="lede">We’ll verify ownership by SMS before this phone can be scheduled.</p>
+</div>
+<section class="card narrow-card">
+  <form method="post" class="stack-form">
+    {% csrf_token %}
+    {% include "includes/form_fields.html" with form=form %}
+    <button class="button button-primary" type="submit">Continue to verification</button>
+  </form>
+</section>
+{% endblock %}

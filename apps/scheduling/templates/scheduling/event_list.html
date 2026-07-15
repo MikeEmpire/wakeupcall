@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Events · Wakeup Call{% endblock %}
+{% block content %}
+<div class="page-heading split-heading">
+  <div>
+    <p class="eyebrow">Weather-aware reminders</p>
+    <h1>Your wake-up events</h1>
+    <p class="lede">One-time SMS and Voice announcements, stored and scheduled in UTC.</p>
+  </div>
+  <a class="button button-primary" href="{% url 'scheduling_web:event-create' %}">Schedule event</a>
+</div>
+
+{% if event_rows %}
+  <div class="card-list">
+    {% for event, masked_number in event_rows %}
+      <article class="card row-card">
+        <div>
+          <div class="badge-line">
+            <span class="badge badge-{{ event.status }}">{{ event.get_status_display }}</span>
+            <span class="badge badge-neutral">{{ event.get_channel_display }}</span>
+          </div>
+          <h2><a href="{% url 'scheduling_web:event-detail' event.id %}">{{ event.scheduled_for|date:"M j, Y · H:i T" }}</a></h2>
+          <p class="muted">{{ masked_number }} · ZIP {{ event.zip_code }} · Demo</p>
+        </div>
+        <a class="button button-secondary" href="{% url 'scheduling_web:event-detail' event.id %}">View details</a>
+      </article>
+    {% endfor %}
+  </div>
+{% else %}
+  <section class="empty-state card">
+    <div class="empty-icon" aria-hidden="true">☼</div>
+    <h2>No events scheduled</h2>
+    <p>Add and verify a phone, then schedule a safe demo wake-up.</p>
+    <a class="button button-primary" href="{% url 'scheduling_web:event-create' %}">Schedule your first event</a>
+  </section>
+{% endif %}
+{% endblock %}

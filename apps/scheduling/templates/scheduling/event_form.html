@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Schedule event · Wakeup Call{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <a class="back-link" href="{% url 'scheduling_web:event-list' %}">← Back to events</a>
+  <p class="eyebrow">One-time demo</p>
+  <h1>Schedule a wake-up</h1>
+  <p class="lede">The event will render and audit the weather announcement without contacting a real SMS or Voice provider.</p>
+</div>
+<section class="card narrow-card">
+  {% if not form.fields.phone_number.queryset.exists %}
+    <div class="callout">You need a verified phone first. <a href="{% url 'accounts_web:phone-list' %}">Manage phones</a>.</div>
+  {% endif %}
+  <form method="post" class="stack-form">
+    {% csrf_token %}
+    {% include "includes/form_fields.html" with form=form %}
+    <button class="button button-primary" type="submit">Schedule demo event</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Sign in · Wakeup Call{% endblock %}
+{% block content %}
+<section class="auth-card card narrow-card">
+  <p class="eyebrow">Welcome back</p>
+  <h1>Sign in</h1>
+  <p class="lede">Use an existing Wakeup Call account. Registration is intentionally not available.</p>
+  <form method="post" class="stack-form">
+    {% csrf_token %}
+    {% include "includes/form_fields.html" with form=form %}
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    <button class="button button-primary" type="submit">Sign in</button>
+  </form>
+</section>
+{% endblock %}

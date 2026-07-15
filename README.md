@@ -71,6 +71,12 @@ python manage.py makemigrations --check
 pytest
 ```
 
+## Browser workflow
+
+The root page redirects authenticated users to the server-rendered application. Existing users can sign in at `/login/`, manage owned phones at `/phones/`, and manage demo wake-up events at `/events/`. Registration is intentionally out of scope.
+
+The browser workflow supports phone enrollment and verification, event list/create/detail, rescheduling, SMS/Voice switching, cancellation, and POST-only logout. It uses the same application services as the APIs. Schedule forms require ISO 8601 input with an explicit offset and explain that storage is UTC. Ordinary users see only masked phone data and their own records; staff receive an additional link to Django Admin.
+
 ## Authenticated event API
 
 The minimal owner-scoped API supports:
@@ -184,4 +190,4 @@ Run the same commands in Docker by prefixing them with `docker compose run --rm 
 
 ## Current boundaries
 
-Registration, token issuance, inbound SMS commands, DTMF/speech interaction, and frontend features are not implemented yet. The staging AWS environment is live with automatic demo processing, but real queued SMS and Voice remain explicitly gated off. The Voice callback route is provider-only, API-created events remain demo-only, and a Twilio provider acceptance result is never described as final carrier delivery.
+Registration, token issuance, inbound SMS commands, and DTMF/speech interaction are not implemented yet. The staging AWS environment is live with automatic demo processing, but real queued SMS and Voice remain explicitly gated off. The Voice callback route is provider-only, public event creation remains demo-only, and a Twilio provider acceptance result is never described as final carrier delivery.

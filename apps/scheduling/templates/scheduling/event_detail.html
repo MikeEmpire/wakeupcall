@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Event details · Wakeup Call{% endblock %}
+{% block content %}
+<div class="page-heading split-heading">
+  <div>
+    <a class="back-link" href="{% url 'scheduling_web:event-list' %}">← Back to events</a>
+    <p class="eyebrow">Event #{{ event.id }}</p>
+    <h1>{{ event.scheduled_for|date:"M j, Y · H:i T" }}</h1>
+    <div class="badge-line">
+      <span class="badge badge-{{ event.status }}">{{ event.get_status_display }}</span>
+      <span class="badge badge-neutral">Demo</span>
+    </div>
+  </div>
+</div>
+
+<section class="card detail-grid" aria-label="Event details">
+  <div><span class="detail-label">Phone</span><strong>{{ masked_number }}</strong></div>
+  <div><span class="detail-label">Channel</span><strong>{{ event.get_channel_display }}</strong></div>
+  <div><span class="detail-label">ZIP code</span><strong>{{ event.zip_code }}</strong></div>
+  <div><span class="detail-label">Stored timezone</span><strong>UTC</strong></div>
+</section>
+
+{% if can_change %}
+  <div class="two-column action-grid">
+    <section class="card">
+      <h2>Reschedule</h2>
+      <form method="post" action="{% url 'scheduling_web:event-reschedule' event.id %}" class="stack-form">
+        {% csrf_token %}
+        {% include "includes/form_fields.html" with form=reschedule_form %}
+        <button class="button button-secondary" type="submit">Update time</button>
+      </form>
+    </section>
+    <section class="card">
+      <h2>Contact method</h2>
+      <form method="post" action="{% url 'scheduling_web:event-channel' event.id %}" class="stack-form">
+        {% csrf_token %}
+        {% include "includes/form_fields.html" with form=channel_form %}
+        <button class="button button-secondary" type="submit">Update channel</button>
+      </form>
+    </section>
+  </div>
+  <section class="danger-zone card">
+    <div>
+      <h2>Cancel event</h2>
+      <p>Cancellation is final and applies only while the event is pending.</p>
+    </div>
+    <form method="post" action="{% url 'scheduling_web:event-cancel' event.id %}">
+      {% csrf_token %}
+      <button class="button button-danger" type="submit">Cancel event</button>
+    </form>
+  </section>
+{% else %}
+  <section class="callout">This event is {{ event.get_status_display|lower }} and can no longer be changed.</section>
+{% endif %}
+{% endblock %}

@@ -122,6 +122,15 @@ Application services must use the model transition method and save the associate
 - API representations contain the phone record ID, not the full phone number, and never expose delivery message bodies, provider payloads, or credentials.
 - Lists are ordered by scheduled time and paginated at 50 records.
 
+### Authenticated browser application
+
+- Existing users authenticate through Django sessions; registration and token issuance remain out of scope.
+- Browser pages expose owner-scoped phone enrollment/verification and event list/create/detail workflows.
+- Rescheduling, channel switching, and cancellation call the same row-locking services as the API. Mutation controls are POST-only and CSRF-protected.
+- Browser scheduling input uses ISO 8601 text with a required explicit offset rather than silently interpreting `datetime-local` input. Stored and displayed scheduling semantics remain UTC.
+- Phone numbers are masked outside enrollment input, and event pages omit attempts, rendered messages, weather snapshots, provider identifiers, and raw payloads.
+- Ordinary users do not receive staff controls. Staff may follow the explicit Admin link, where operational lifecycle fields remain read-only and cancellation stays service-backed.
+
 ## DeliveryAttempt
 
 Represents one auditable execution attempt for an event.
@@ -177,7 +186,7 @@ The Twilio Voice adapter follows the same demo restriction and returns only a va
 
 - The local dispatcher selects due `scheduled` events oldest-first in a bounded batch and claims them with PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED`.
 - Dispatcher runs are demo-only by default. Including real events requires both the disabled-by-default environment gate and an explicit command flag.
-- Claiming permits only `scheduled` events to enter `processing`; cancellation, rescheduling, and channel switching use the same row-lock boundary, so concurrent mutations have one legal winner. A `SKIP LOCKED` batch may safely defer a row being changed until the next scheduler tick.
+- Claiming permits only `scheduled` events to enter `processing`; cancellation, rescheduling, and channel switching use the same row-lock boundary, so concurrent operations serialize against authoritative state. Claiming first rejects a later pending-event change. A time or channel change that commits first may be followed legally by cancellation or claiming. A `SKIP LOCKED` batch may safely defer a row being changed until the next scheduler tick.
 - An event whose scheduled time is strictly more than the configured grace period in the past transitions through `processing` to `failed`, with a `MissedDeliveryWindow` attempt. It does not call weather or message providers. The default grace period is 15 minutes.
 - Reprocessing a terminal delivered/failed/suppressed event returns the latest attempt without another send.
 - A `processing` or `cancelled` event is not deliverable.

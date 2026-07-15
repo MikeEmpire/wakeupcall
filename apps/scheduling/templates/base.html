@@ -1,0 +1,42 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Wakeup Call{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'wakeupcall/app.css' %}">
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell nav-shell">
+      <a class="brand" href="{% url 'scheduling_web:event-list' %}">
+        <span class="brand-mark" aria-hidden="true">☀</span>
+        <span>Wakeup Call</span>
+      </a>
+      {% if user.is_authenticated %}
+        <nav aria-label="Main navigation">
+          <a href="{% url 'scheduling_web:event-list' %}">Events</a>
+          <a href="{% url 'accounts_web:phone-list' %}">Phones</a>
+          {% if user.is_staff %}<a href="{% url 'admin:index' %}">Staff admin</a>{% endif %}
+          <form action="{% url 'logout' %}" method="post" class="inline-form">
+            {% csrf_token %}
+            <button class="link-button" type="submit">Sign out</button>
+          </form>
+        </nav>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="shell page-shell">
+    {% if messages %}
+      <div class="messages" aria-live="polite">
+        {% for message in messages %}
+          <div class="message message-{{ message.tags|default:'info' }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

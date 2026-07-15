@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Verify phone · Wakeup Call{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <a class="back-link" href="{% url 'accounts_web:phone-list' %}">← Back to phones</a>
+  <p class="eyebrow">Ownership check</p>
+  <h1>Verify {{ masked_number }}</h1>
+  <p class="lede">Request a code by SMS, then enter the 4–10 digits below.</p>
+</div>
+
+{% if phone.is_verified %}
+  <section class="card narrow-card success-panel">
+    <span class="badge badge-success">Verified</span>
+    <h2>This phone is ready</h2>
+    <p>You can now use it for a demo wake-up event.</p>
+    <a class="button button-primary" href="{% url 'scheduling_web:event-create' %}">Schedule an event</a>
+  </section>
+{% else %}
+  <div class="two-column">
+    <section class="card">
+      <p class="step-number">Step 1</p>
+      <h2>Request a code</h2>
+      <p>Twilio Verify sends the code. Wakeup Call never stores it.</p>
+      <form method="post" action="{% url 'accounts_web:phone-verification-start' phone.id %}">
+        {% csrf_token %}
+        <button class="button button-secondary" type="submit">Send verification code</button>
+      </form>
+    </section>
+    <section class="card">
+      <p class="step-number">Step 2</p>
+      <h2>Enter the code</h2>
+      <form method="post" class="stack-form">
+        {% csrf_token %}
+        {% include "includes/form_fields.html" with form=form %}
+        <button class="button button-primary" type="submit">Verify phone</button>
+      </form>
+    </section>
+  </div>
+{% endif %}
+{% endblock %}

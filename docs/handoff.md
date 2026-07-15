@@ -12,6 +12,8 @@ Phase 11 adds dedicated owner-scoped actions to reschedule a pending event and s
 
 Phase 12 adds authenticated phone enrollment, listing, verification-start, and verification-check endpoints. Enrollment accepts an E.164 number as write-only input and returns masked phone metadata. Verification actions are owner-scoped, expose only normalized status, and never return codes or provider SIDs. Duplicate numbers use the same safe validation response across owners; approved checks set `verified_at`, rejected checks leave it unset, and checks are idempotent after approval. Separate per-user DRF throttle scopes default to three starts and ten checks per hour.
 
+Phase 13 adds a responsive server-rendered Django application for existing users. Session-authenticated pages cover phone enrollment/verification and event list/create/detail. Pending events can be rescheduled, switched between SMS and Voice, or cancelled through the same locking services used by the API. All browser mutations are POST-only and CSRF-protected. Schedule forms require an explicit ISO 8601 offset, phone data is masked, delivery/provider internals remain absent, and only staff receive an Admin navigation link.
+
 Phase 10 is live in the staging AWS account in `us-east-1`. The `wakeup-call-staging-foundation`, `wakeup-call-staging-queue`, and `wakeup-call-staging-application` CloudFormation stacks create the immutable ECR repository, shared SNS alarm topic, encrypted SQS/DLQ transport, two-AZ VPC, public TLS ALB, private Fargate tasks, private encrypted RDS PostgreSQL, Secrets Manager configuration, retained log groups, and basic alarms. Cloudflare DNS routes `wakeupcall.afam.app` to the ALB, and the ACM certificate is issued.
 
 Image commit `b1d7d4fb93a689e17e3f2ce2e0518b80c364c375` was built for `linux/amd64`, pushed under its full commit tag, and deployed to all task definitions. The migration task completed with exit code 0. Web and worker are each steady at one running task, the ALB target is healthy, and `https://wakeupcall.afam.app/health/` returns HTTP 200. Provider configuration is stored in the generated application secret; Voice remains unset because `TWILIO_VOICE_FROM_NUMBER` has not been configured.
@@ -38,12 +40,12 @@ The worker retries only explicitly retryable failures that occur before entering
 
 `POST /twilio/voice/status/` validates Twilio signatures against the configured canonical HTTPS callback URL. It maps signed Call SID, Call Status, and Sequence Number fields into normalized attempt-level provider status. Sequence numbers make duplicates and out-of-order callbacks no-ops, terminal provider outcomes cannot regress, and the local event remains `submitted`.
 
-The most recent Phase 12 validation result is:
+The most recent Phase 13 validation result is:
 
 - `python manage.py check`: passed with a temporary SQLite override
 - `python manage.py makemigrations --check`: passed; no model migration required
-- `pytest`: 286 passed, 5 PostgreSQL-only tests skipped with a temporary SQLite override
-- `docker compose run --rm web pytest`: 291 passed against PostgreSQL, including all existing concurrency coverage
+- `pytest`: 316 passed, 5 PostgreSQL-only tests skipped with a temporary SQLite override
+- `docker compose run --rm web pytest`: 321 passed against PostgreSQL, including all existing concurrency coverage
 - `ruff check .`: passed
 - `docker compose config --quiet`: passed
 - `docker compose build`: passed
@@ -59,33 +61,33 @@ The most recent Phase 12 validation result is:
 - CloudWatch alarms: all five `OK`
 - EventBridge Scheduler: `ENABLED`; automatic demo-only cycle passed
 - real worker delivery: `false`
+- in-app browser verification: blocked by the browser tool's sandbox handshake before navigation; focused Django render/form tests passed
 
-No registration, token issuance endpoint, browser application, or SMS status callback exists. The user confirmed the credentialed weather smoke command succeeds. A live Twilio SMS smoke to a physical US handset reached the Messages API, returned a Message SID, and produced local `submitted` state; Twilio later reported `undelivered` with error `30034` because the US 10DLC sender is not attached to an approved A2P campaign. A second live smoke to Twilio's Virtual Phone also returned a valid Message SID and produced a fully audited local `submitted` attempt without error, providing a carrier-independent demonstration while A2P approval remains pending. Twilio Verify, Voice, and Voice callbacks have mocked coverage but have not been live-smoke-tested from this repository session.
+No registration, token issuance endpoint, or SMS status callback exists. The user confirmed the credentialed weather smoke command succeeds. A live Twilio SMS smoke to a physical US handset reached the Messages API, returned a Message SID, and produced local `submitted` state; Twilio later reported `undelivered` with error `30034` because the US 10DLC sender is not attached to an approved A2P campaign. A second live smoke to Twilio's Virtual Phone also returned a valid Message SID and produced a fully audited local `submitted` attempt without error, providing a carrier-independent demonstration while A2P approval remains pending. Twilio Verify, Voice, and Voice callbacks have mocked coverage but have not been live-smoke-tested from this repository session.
 
 ## Next Recommended Slice
 
-Implement Phase 13 as a minimal server-rendered Django application using the existing services.
+Implement Phase 14 as one bounded Voice DTMF interaction after documenting the exact meaning of “next scheduled time.”
 
 Stop after:
 
-- add session login/logout for existing users; registration remains out of scope
-- add accessible pages for phone enrollment/verification and event list/create/detail
-- expose reschedule, channel-switch, and cancellation controls through the existing application services
-- preserve CSRF protection, owner scoping, explicit-offset/UTC clarity, and privacy-safe phone/event representations
-- distinguish ordinary-user workflows from Django staff/Admin behavior
-- add focused view/form tests and browser-level verification of the completed workflow
+- define one small digit menu and its auditable effects for the one-time-event model
+- generate bounded `<Gather>` TwiML and add a dedicated Twilio-signed action webhook
+- resolve actions through attempt/event identifiers and owner-safe row-locking services rather than caller-supplied ownership
+- make webhook retries idempotent and return safe TwiML for invalid, duplicate, or stale actions
+- add mocked signature, action, lifecycle, and duplicate tests before any optional live smoke
 
-Do not add registration, token issuance, a SPA, inbound Twilio commands, DTMF, recurrence, new apps, or AWS deployment changes. Do not enable real worker delivery. Phase 13 scope and exit criteria are in `docs/roadmap.md`.
+Do not add speech recognition, inbound SMS, inbound-call scheduling, recurrence, registration, new apps, or AWS deployment changes. Do not enable real worker delivery. Phase 14 scope and exit criteria are in `docs/roadmap.md`.
 
 ## Start Here
 
 Read:
 
-1. Phase 13 in `docs/roadmap.md`
-2. phone, event, and privacy invariants in `docs/domain.md`
-3. current API/service boundaries in `docs/architecture.md`
-4. `apps/accounts/` and `apps/scheduling/` services, serializers, and tests
-5. Django authentication, form, and template conventions already available in the project
+1. Phase 14 in `docs/roadmap.md`
+2. event lifecycle and provider callback invariants in `docs/domain.md`
+3. Voice adapter/callback boundaries in `docs/architecture.md`
+4. `apps/delivery/twilio_voice.py`, `twilio_webhooks.py`, callback views, and tests
+5. Phase 11 scheduling services for any documented pending-event action
 
 Run the baseline before editing:
 
@@ -118,6 +120,10 @@ Use Basic authentication over TLS or an authenticated Django session. Creation r
 Rescheduling accepts only `scheduled_for`; channel switching accepts only `channel`. Both actions apply only while the event remains `scheduled` and leave all other event and attempt data unchanged.
 
 Phone enrollment accepts a full E.164 number as write-only input. Phone responses expose a masked number and verification state. Verification start/check responses expose normalized status only; start and check rates default to `3/hour` and `10/hour` per authenticated user.
+
+## Browser Workflow
+
+Existing users sign in at `/login/`, manage phones at `/phones/`, and manage demo events at `/events/`. The browser uses Django sessions, CSRF-protected POST mutations, masked phone data, explicit-offset schedule input, and the same application services as the APIs. Registration is not exposed.
 
 ## Current Manual Workflow
 
@@ -192,6 +198,7 @@ This places a real call and has not been run in this repository session. The cal
 - Direct model status assignment can bypass transition methods; application code must use services and transition methods.
 - Real queue delivery is intentionally available only behind two explicit gates and has not been live-smoke-tested; only the single-event SMS staging path has made a real request.
 - PostgreSQL `SKIP LOCKED` may defer a due event for one scheduler cycle while a pending-event mutation holds its row lock; the next tick reloads the resulting authoritative state.
+- Browser-level visual verification remains pending because the in-app browser tool could not complete its sandbox handshake in this session. Django template rendering and the complete form/view workflow have deterministic automated coverage.
 
 ## Environment Note
 

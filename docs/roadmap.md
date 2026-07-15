@@ -118,7 +118,7 @@ Goal: expose only the workflows required by the exercise.
 - Controlled Django Admin cancellation through the same service boundary
 - Authentication, ownership, validation, state, privacy, and method tests
 
-Registration, token issuance, phone management/verification endpoints, frontend work, and broad account APIs remain deferred.
+Registration, token issuance, and broad account APIs remain deferred. Phone verification and the bounded server-rendered workflow are completed in later slices below.
 
 ## Phase 10: AWS Deployment Artifacts — Staging Operational, Security Handoff Pending
 
@@ -148,7 +148,7 @@ Goal: let an authenticated owner change the next pending wake-up time or contact
 - Dedicated API actions preserve the read-only detail resource and return `404` for hidden identifiers, `400` for invalid input, and `409` for lifecycle conflicts.
 - Rescheduled datetimes require an explicit offset and a strictly future value, then normalize to UTC.
 - Destination, ZIP code, demo state, lifecycle fields, and delivery attempts remain unchanged.
-- Functional tests cover validation, ownership, and terminal states; PostgreSQL tests cover races with cancellation and delivery claiming.
+- Functional tests cover validation, ownership, and terminal states; PostgreSQL tests prove that races with cancellation and delivery claiming serialize into legal authoritative outcomes.
 
 ## Completed Phone Enrollment and Verification API
 
@@ -160,21 +160,17 @@ Goal: expose the existing Twilio Verify boundary as a safe authenticated ownersh
 - Duplicate numbers, already-verified phones, rejected or expired challenges, provider errors, and ownership boundaries have safe, tested responses.
 - Full phone numbers and codes are write-only; provider SIDs, credentials, and raw payloads remain outside API representations.
 
-## Phase 13: Minimal User Application — Next
+## Completed Minimal User Application
 
 Goal: satisfy scheduling "using the app" with a small server-rendered Django workflow rather than a separate frontend stack.
 
-Scope:
+- Existing users can sign in and out through Django sessions; registration remains absent.
+- Responsive server-rendered pages cover phone enrollment/verification and event list/create/detail.
+- Reschedule, cancel, and SMS/Voice controls call the same application services as the APIs.
+- CSRF, owner scoping, accessible errors, explicit-offset/UTC guidance, masking, and omission of delivery/provider internals have focused coverage.
+- Ordinary users receive only user workflows; staff receive an explicit path to the existing controlled Admin.
 
-- Django session login/logout using the existing custom user model.
-- Pages for phone enrollment/verification and event list/create/detail.
-- Controls for reschedule, cancel, and SMS/Voice switching through the same application services used by the API.
-- CSRF protection, owner scoping, accessible form errors, UTC/offset clarity, and no delivery-attempt/provider internals in user pages.
-- A clear ordinary-user versus Django staff/Admin demonstration.
-
-Exit criteria: an existing ordinary user can complete the verified-phone and demo scheduling workflow in a browser, while staff can inspect and safely cancel through Admin. Registration, a SPA, and broad account management remain out of scope.
-
-## Phase 14: Voice DTMF Interaction — Planned
+## Phase 14: Voice DTMF Interaction — Next
 
 Goal: satisfy the call-interaction requirement with one bounded DTMF flow; speech recognition remains optional.
 

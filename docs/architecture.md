@@ -18,8 +18,8 @@ The repository is one Django project with four local applications:
 
 | App | Current responsibility |
 | --- | --- |
-| `accounts` | Custom user, owned phone numbers, verification services, and Twilio Verify adapter |
-| `scheduling` | One-time scheduled events, authenticated owner-scoped API, row-locked pending-event mutation services, admin action, lifecycle, and deterministic scenario seeding |
+| `accounts` | Custom user, owned phone numbers, verification services, authenticated API/browser phone workflows, and Twilio Verify adapter |
+| `scheduling` | One-time scheduled events, authenticated owner-scoped API/browser workflows, row-locked pending-event mutation services, admin action, lifecycle, and deterministic scenario seeding |
 | `delivery` | Delivery attempts, due-event publication and claiming, SQS transport/worker, announcement rendering, Twilio adapters, callback handling, and orchestration |
 | `weather` | Normalized weather value object, provider boundary, deterministic fake, and WeatherAPI.com REST adapter |
 
@@ -141,6 +141,12 @@ Django Admin retains operational visibility with lifecycle fields read-only. Its
 Phone enrollment accepts the full number as a write-only value. Representations return only a masked number, local verification state, and audit timestamps. The verification actions return normalized status and safe phone metadata without codes, provider SIDs, raw payloads, or credentials. Duplicate enrollment uses the same generic validation error whether the existing globally unique number belongs to the caller or another user.
 
 The views delegate ownership and verification behavior to application services and construct the Twilio adapter only after an owned unverified record is established. Provider calls remain outside database transactions; an approved check then row-locks the phone before setting `verified_at`. Separate cache-backed DRF throttle scopes default to `3/hour` for starts and `10/hour` for checks. These throttles are approximate and process-local with the current cache configuration.
+
+### Server-rendered user application
+
+The minimal Django UI is mounted at `/`, `/phones/`, and `/events/`, with built-in session login/logout at `/login/` and `/logout/`. App-owned forms and views remain thin: they validate browser input, enforce owner-scoped lookup, and delegate creation, verification, rescheduling, channel changes, and cancellation to the same application services used by the APIs.
+
+All mutations are POST-only and protected by Django CSRF middleware. Event forms deliberately use explicit-offset ISO 8601 text instead of browser-local `datetime-local` interpretation. Templates render masked phone metadata and event lifecycle fields but omit delivery attempts, rendered announcements, weather snapshots, provider SIDs, and raw payloads. A shared responsive stylesheet supplies the small accessible interface without a JavaScript application or frontend build chain. Ordinary users receive Events and Phones navigation; `is_staff` users additionally receive an explicit Admin link.
 
 ## Service Boundaries
 
