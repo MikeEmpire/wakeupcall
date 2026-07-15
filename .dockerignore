@@ -1,0 +1,12 @@
+.env
+.git
+.gitignore
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.py[cod]
+*.sqlite3
+db.sqlite3
+htmlcov
+staticfiles
