@@ -2,7 +2,7 @@
 
 ## Scope
 
-The current domain supports one-time weather announcements to a verified US phone number by SMS or voice. Demo delivery is wired end to end, Twilio Verify is implemented behind an application gateway, and non-demo SMS and voice events can be submitted to Twilio through opt-in staging commands. Voice call progress is recorded from authenticated Twilio callbacks.
+The current domain supports authenticated creation and ownership-scoped access to one-time weather announcements for a verified US phone number by SMS or voice. Demo delivery is wired end to end, due events can move through a versioned SQS worker boundary, Twilio Verify is implemented behind an application gateway, and non-demo SMS and voice events can be submitted through explicitly gated commands. Voice call progress is recorded from authenticated Twilio callbacks.
 
 ## User
 
@@ -107,6 +107,17 @@ Status meanings:
 
 Application services must use the model transition method and save the associated timestamps. Direct status assignment bypasses transition validation and is not an approved application path. Admin exposes operational status fields as read-only.
 
+### Authenticated event API
+
+- All event endpoints require an authenticated custom `accounts.User` through DRF Basic or session authentication.
+- List and retrieve queries are filtered by owner. Another user's identifier returns `404`, including at the cancellation endpoint.
+- Creation accepts a verified phone record ID owned by the authenticated user. Other users' and unverified phone records produce the same field-validation failure.
+- `scheduled_for` must include an explicit ISO 8601 offset. Inputs are normalized to UTC; naive local times are rejected because user time zones are not modeled.
+- API-created events are always demo events. Client-supplied `status` and `is_demo` values cannot override server-owned safety and lifecycle fields.
+- Event detail is read-only. Cancellation is a dedicated `POST` action and succeeds only from `scheduled`; lifecycle conflicts return `409`.
+- API representations contain the phone record ID, not the full phone number, and never expose delivery message bodies, provider payloads, or credentials.
+- Lists are ordered by scheduled time and paginated at 50 records.
+
 ## DeliveryAttempt
 
 Represents one auditable execution attempt for an event.
@@ -131,7 +142,7 @@ processing ----> submitted
            +---> suppressed
 ```
 
-Attempts do not currently retry or move between terminal states. A retry will create a new attempt number rather than rewrite historical attempt data.
+Attempts never move between terminal states. A queue retry creates a new attempt number rather than rewriting historical attempt data. Retryable pre-send weather failures leave the event in `processing` while the failed attempt records a `QueueRetryable:*` error. The original SQS message owns the retry and creates the next attempt under the event row lock. Exhaustion moves the event to `failed` with `RetryExhausted:*`; the message remains undeleted so SQS can redrive it to the DLQ.
 
 The attempt's local `submitted` status remains terminal and means only that Twilio accepted the create request. Voice callbacks update a separate provider-status lifecycle:
 
@@ -148,9 +159,11 @@ The weather snapshot is JSON because it is historical evidence with a small prov
 
 ## Demo Delivery Invariant
 
-A demo event follows the normal workflow through weather lookup, announcement rendering, and attempt creation. At the sender boundary it must use `DemoMessageSender`, which logs the intended message with a masked destination. It then becomes `suppressed`.
+A demo event follows the normal workflow through weather lookup, announcement rendering, and attempt creation. At the sender boundary it must use `DemoMessageSender`, which logs only the channel, masked destination, and message length. The complete rendered announcement remains in the delivery-attempt audit record rather than application logs. The event then becomes `suppressed`.
 
 Demo mode must never be implemented as an early return that skips auditing, and a demo event must never be passed to a real SMS or voice adapter.
+
+The deployment template preserves the same invariant. Worker tasks default to `DELIVERY_REAL_WORKER_ENABLED=false` and omit `--allow-real-delivery`; enabling real queue delivery changes both gates together through an explicit stack parameter. The Scheduler and both ECS services also default off/zero until secrets and migrations are verified. None of these infrastructure gates replaces the application-level demo sender selection.
 
 The Twilio SMS adapter returns only a validated Message SID. A successful create call moves a non-demo event to `submitted`; it does not prove handset delivery. Provider objects and raw responses stay inside the adapter. The staging smoke command additionally requires a disabled-by-default feature flag, command-line confirmation, and an event destination matching the explicitly configured authorized staging number.
 
@@ -158,18 +171,27 @@ The Twilio Voice adapter follows the same demo restriction and returns only a va
 
 ## Idempotency and Concurrency
 
-- Claiming uses a database row lock and permits only `scheduled` events to enter `processing`.
+- The local dispatcher selects due `scheduled` events oldest-first in a bounded batch and claims them with PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED`.
+- Dispatcher runs are demo-only by default. Including real events requires both the disabled-by-default environment gate and an explicit command flag.
+- Claiming permits only `scheduled` events to enter `processing`; cancellation uses the same row-lock boundary, so exactly one operation wins the race.
+- An event whose scheduled time is strictly more than the configured grace period in the past transitions through `processing` to `failed`, with a `MissedDeliveryWindow` attempt. It does not call weather or message providers. The default grace period is 15 minutes.
 - Reprocessing a terminal delivered/failed/suppressed event returns the latest attempt without another send.
 - A `processing` or `cancelled` event is not deliverable.
-- PostgreSQL is required to validate true row-lock behavior. SQLite tests validate functional flow only.
+- PostgreSQL tests validate duplicate-claim and cancellation races. SQLite tests validate the functional flow only.
 
-Before asynchronous processing, define:
+Queue invariants:
 
-- recovery policy for stale `processing` events
-- transient versus permanent failure categories
-- retry limits and delay policy
-- unknown-outcome policy after an ambiguous external call
-- missed-event grace window
+- The focused AWS template configures EventBridge Scheduler to emit one `dispatch_due_events` tick envelope per minute when deployed and enabled; it does not create one schedule per event.
+- The tick selects a bounded oldest-first set of still-`scheduled` event IDs and publishes identifier-only delivery envelopes without changing database state.
+- Publication may duplicate an ID. The worker reloads authoritative state and row-locks the event immediately before claiming, so duplicates cannot create a second provider call after a legal claim.
+- Demo events are the default queue scope. Real events require the worker environment gate and explicit worker command flag.
+- Only retryable failures before entering the message-sender boundary are automatically retried. Any sender exception is terminal because provider acceptance may be ambiguous.
+- Malformed messages and retry-exhausted transient failures remain undeleted for bounded SQS redrive. Permanent local failures are audited and acknowledged.
+- A retrying event remains `processing`, preventing the next scheduler tick from publishing a fresh message with a reset receive count.
+
+Stale `processing` events are deliberately quarantined in the current slice. There is no automatic replay because the process may have died after Twilio accepted a request but before its SID was committed. A future worker recovery workflow must inspect and reconcile that ambiguous outcome; elapsed time alone is not permission to send again.
+
+The current bounded policy uses three SQS receives, visibility-based exponential delay from 30 to 300 seconds, and no automatic replay after the sender boundary. Queue resource values and worker settings must remain aligned.
 
 ## Current Product Assumptions
 

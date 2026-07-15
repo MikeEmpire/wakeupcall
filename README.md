@@ -1,6 +1,6 @@
 # Wakeup Call
 
-The project provides a clean Django foundation for a weather-aware wake-up call application. It includes a custom user model, verified phone and one-time event domain models, delivery-attempt auditing, a synchronous demo-delivery workflow, WeatherAPI.com, Twilio Verify, SMS, and Voice adapters, authenticated Voice status callbacks, PostgreSQL configuration, Docker development services, console logging, Django REST Framework, and a lightweight health endpoint. Asynchronous scheduling and processing are intentionally deferred.
+The project provides a production-minded Django foundation for a weather-aware wake-up call application. It includes verified one-time events, delivery auditing, a bounded local dispatcher, a versioned SQS worker boundary, WeatherAPI.com, Twilio Verify, SMS and Voice adapters, authenticated Voice callbacks, PostgreSQL, Docker development services, and a lightweight health endpoint.
 
 ## Local virtual-environment setup
 
@@ -39,7 +39,7 @@ Compose runs Django at <http://localhost:8000/> and PostgreSQL in an internal se
 
 ## Environment configuration
 
-Settings default to `config.settings.development`. Production processes must use `config.settings.production` and provide `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, and `DATABASE_URL`.
+Settings default to `config.settings.development`. Production processes must use `config.settings.production` and provide `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, and either `DATABASE_URL` or the discrete `DATABASE_HOST`, `DATABASE_NAME`, `DATABASE_USER`, and `DATABASE_PASSWORD` settings used by ECS secret injection.
 
 `.env` is ignored by Git. Never commit real secrets. The values in `.env.example` are development placeholders only.
 
@@ -59,6 +59,30 @@ python manage.py makemigrations --check
 pytest
 ```
 
+## Authenticated event API
+
+The minimal owner-scoped API supports:
+
+```text
+GET  /api/events/
+POST /api/events/
+GET  /api/events/{id}/
+POST /api/events/{id}/cancel/
+```
+
+Use Django session authentication or, for exercise/testing clients, HTTP Basic authentication over TLS. Basic authentication is not the final production identity design. There is intentionally no registration or token-issuance endpoint. A create request references an existing verified phone record owned by the user:
+
+```json
+{
+  "phone_number_id": 1,
+  "zip_code": "94107",
+  "scheduled_for": "2026-07-16T14:30:00Z",
+  "channel": "sms"
+}
+```
+
+API-created events are always demos. Datetimes require an explicit offset and are returned in UTC. Representations contain phone record IDs, not full phone numbers or delivery message bodies.
+
 Process a due demo event with deterministic fake weather:
 
 ```bash
@@ -66,6 +90,26 @@ python manage.py deliver_demo_event EVENT_ID
 ```
 
 The command records the rendered announcement and suppressed delivery attempt. It does not contact Twilio or any weather service.
+
+Create the deterministic 30-event scheduling matrix, then process one bounded due batch:
+
+```bash
+python manage.py seed_scheduling_scenarios
+python manage.py dispatch_due_events
+```
+
+The dispatcher is demo-only by default, uses a 25-event batch and 15-minute grace window, and never contacts Twilio for demo events. Real batch delivery requires both `DELIVERY_REAL_DISPATCH_ENABLED=true` and the explicit `--allow-real-delivery` flag; use it only when every due real event is intentionally authorized for provider submission.
+
+Publish one bounded batch to SQS or run the long-polling worker:
+
+```bash
+python manage.py publish_due_events
+python manage.py run_delivery_worker
+```
+
+Use `run_delivery_worker --once` for one bounded poll. Configure `AWS_REGION`, `DELIVERY_QUEUE_URL`, and `WEATHER_API_KEY`. Queue processing is demo-only by default. Real queued SMS/Voice requires both `DELIVERY_REAL_WORKER_ENABLED=true` and `--allow-real-delivery` on the worker. The queue resources are defined in `infra/aws/phase8-queue.yaml`; deployment-ready ECR and ECS/RDS/ALB templates are in `infra/aws/phase10-ecr.yaml` and `infra/aws/phase10-application.yaml`.
+
+The ordered AWS rollout, secret handling, migration task, safety gates, validation, and teardown process are documented in [`docs/deployment.md`](docs/deployment.md). The templates create billable resources when deployed; no live AWS deployment is performed by local validation.
 
 With `WEATHER_API_KEY` configured, smoke-test the real weather adapter without creating or delivering an event:
 
@@ -103,4 +147,4 @@ Run the same commands in Docker by prefixing them with `docker compose run --rm 
 
 ## Current boundaries
 
-User-facing verification endpoints, schedulers, queues, AWS deployment resources, registration, and frontend features are deferred to later phases. Twilio Verify is available through application services, but no public workflow exposes it yet. Real SMS and Voice are exposed only through opt-in staging management commands; the callback route is provider-only, and there is no user-facing delivery API.
+User-facing phone verification endpoints, registration, token issuance, and frontend features are deferred. AWS deployment artifacts exist but have not been deployed by this repository session. Real SMS and Voice require explicit gates; the callback route is provider-only, and API-created events remain demo-only.

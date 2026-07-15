@@ -29,6 +29,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "config.middleware.LoadBalancerHealthCheckMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -59,12 +60,30 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
-DATABASES = {
-    "default": env.db(
-        "DATABASE_URL",
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-    )
-}
+DATABASE_URL = env("DATABASE_URL", default="")
+DATABASE_HOST = env("DATABASE_HOST", default="")
+DATABASE_NAME = env("DATABASE_NAME", default="")
+DATABASE_USER = env("DATABASE_USER", default="")
+DATABASE_PASSWORD = env("DATABASE_PASSWORD", default="")
+DATABASE_PORT = env.int("DATABASE_PORT", default=5432)
+
+if DATABASE_URL:
+    DATABASES = {"default": env.db_url_config(DATABASE_URL)}
+elif all((DATABASE_HOST, DATABASE_NAME, DATABASE_USER, DATABASE_PASSWORD)):
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "HOST": DATABASE_HOST,
+            "NAME": DATABASE_NAME,
+            "USER": DATABASE_USER,
+            "PASSWORD": DATABASE_PASSWORD,
+            "PORT": DATABASE_PORT,
+        }
+    }
+else:
+    DATABASES = {
+        "default": env.db_url_config(f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -84,7 +103,17 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 
-REST_FRAMEWORK = {}
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.BasicAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 50,
+}
 CORS_ALLOWED_ORIGINS = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])
 
 WEATHER_API_KEY = env("WEATHER_API_KEY", default="")
@@ -109,6 +138,45 @@ TWILIO_VOICE_STATUS_CALLBACK_URL = env(
 )
 TWILIO_VOICE_SMOKE_ENABLED = env.bool("TWILIO_VOICE_SMOKE_ENABLED", default=False)
 TWILIO_VOICE_SMOKE_TO_NUMBER = env("TWILIO_VOICE_SMOKE_TO_NUMBER", default="")
+
+DELIVERY_DISPATCH_BATCH_SIZE = env.int("DELIVERY_DISPATCH_BATCH_SIZE", default=25)
+DELIVERY_MISSED_GRACE_MINUTES = env.int(
+    "DELIVERY_MISSED_GRACE_MINUTES",
+    default=15,
+)
+DELIVERY_REAL_DISPATCH_ENABLED = env.bool(
+    "DELIVERY_REAL_DISPATCH_ENABLED",
+    default=False,
+)
+AWS_REGION = env("AWS_REGION", default="us-east-1")
+DELIVERY_QUEUE_URL = env("DELIVERY_QUEUE_URL", default="")
+DELIVERY_QUEUE_CONNECT_TIMEOUT = env.float(
+    "DELIVERY_QUEUE_CONNECT_TIMEOUT",
+    default=2.0,
+)
+DELIVERY_QUEUE_READ_TIMEOUT = env.float("DELIVERY_QUEUE_READ_TIMEOUT", default=25.0)
+DELIVERY_QUEUE_RECEIVE_BATCH_SIZE = env.int(
+    "DELIVERY_QUEUE_RECEIVE_BATCH_SIZE",
+    default=10,
+)
+DELIVERY_QUEUE_WAIT_SECONDS = env.int("DELIVERY_QUEUE_WAIT_SECONDS", default=20)
+DELIVERY_QUEUE_VISIBILITY_SECONDS = env.int(
+    "DELIVERY_QUEUE_VISIBILITY_SECONDS",
+    default=120,
+)
+DELIVERY_QUEUE_MAX_RECEIVES = env.int("DELIVERY_QUEUE_MAX_RECEIVES", default=3)
+DELIVERY_QUEUE_RETRY_BASE_SECONDS = env.int(
+    "DELIVERY_QUEUE_RETRY_BASE_SECONDS",
+    default=30,
+)
+DELIVERY_QUEUE_RETRY_MAX_SECONDS = env.int(
+    "DELIVERY_QUEUE_RETRY_MAX_SECONDS",
+    default=300,
+)
+DELIVERY_REAL_WORKER_ENABLED = env.bool(
+    "DELIVERY_REAL_WORKER_ENABLED",
+    default=False,
+)
 
 LOGGING = {
     "version": 1,

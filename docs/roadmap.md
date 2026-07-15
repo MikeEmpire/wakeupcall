@@ -77,51 +77,50 @@ Authenticated user endpoints and application-level request throttling remain par
 
 DTMF and speech interaction remain deferred.
 
-## Phase 7: Local Due-Event Dispatcher
+## Completed Local Due-Event Dispatcher
 
 Goal: prove scheduling behavior before introducing AWS.
 
-Scope:
+- Bounded, oldest-first due-event selection with a hard batch maximum
+- PostgreSQL `SKIP LOCKED` claiming and cancellation race coverage
+- Configurable missed-event grace window that fails without provider calls
+- Demo-only default with two explicit gates before real provider delivery
+- Stale-processing quarantine design that avoids unsafe automatic replay
+- Repeatable thirty-event seed command covering channels, times, statuses, and demo behavior
+- Functional SQLite coverage and concurrency tests run against PostgreSQL
 
-- Management command to find due events in bounded batches
-- PostgreSQL-safe row claiming
-- Missed-event grace-window policy
-- Cancellation race tests
-- Stale-processing recovery design
-- Thirty-event seed command covering channels, times, statuses, and demo behavior
-
-Run concurrency tests against PostgreSQL.
-
-## Phase 8: SQS Worker and EventBridge Tick
+## Completed SQS Worker and EventBridge Tick
 
 Goal: move the proven dispatcher and delivery invocation onto AWS-compatible asynchronous transport.
 
-Scope:
+- Strict versioned tick and identifier-only delivery envelopes
+- Bounded non-claiming publication that safely tolerates duplicates
+- SQS adapter with bounded HTTP behavior and safe project-owned errors
+- Long-polling worker with row-locked authoritative claims
+- Three-receive retry policy limited to pre-sender transient failures
+- Standard queue, encrypted DLQ, disabled-by-default one-minute Scheduler tick, and least-privilege scheduler role
+- CloudWatch alarms for DLQ depth and oldest-message age
+- Functional SQLite coverage and duplicate-worker concurrency coverage on PostgreSQL
 
-- SQS Standard queue and DLQ
-- Small versioned message envelope containing event IDs
-- Long-polling worker command
-- Visibility timeout and bounded retry behavior
-- EventBridge minute tick
-- Queue metrics and DLQ alerting plan
+Celery, Redis, per-event schedules, transactional outbox, and ambiguous provider replay remain excluded.
 
-Do not add Celery, Redis, or one EventBridge schedule per user event.
-
-## Phase 9: User/API Surface
+## Completed User/API Surface
 
 Goal: expose only the workflows required by the exercise.
 
-Scope:
+- DRF Basic and session authentication with authenticated-by-default permissions
+- Paginated, ordered, user-owned event list and retrieval
+- Demo-only event creation using an owned verified phone record ID
+- Explicit-offset datetime input normalized to UTC
+- Dedicated row-locked cancellation action with conflict responses for illegal states
+- Cross-user objects consistently hidden with `404`
+- Read-only lifecycle fields and no general update/delete endpoint
+- Controlled Django Admin cancellation through the same service boundary
+- Authentication, ownership, validation, state, privacy, and method tests
 
-- Authentication and user-owned event queries
-- Create, list, retrieve, and cancel operations
-- Django REST Framework only where an external REST API is actually required
-- Administrator visibility and controlled actions
-- Object ownership and authorization tests
+Registration, token issuance, phone management/verification endpoints, frontend work, and broad account APIs remain deferred.
 
-Clarify whether “external REST API” means the weather dependency or a public application API before expanding this phase.
-
-## Phase 10: AWS Deployment
+## Phase 10: AWS Deployment Artifacts — Implemented, Live Deployment Pending
 
 Goal: deploy the existing image and commands without changing business behavior.
 
@@ -131,11 +130,15 @@ Scope:
 - Fargate web and worker services
 - RDS PostgreSQL
 - ALB, health check, and TLS
-- SQS, DLQ, and EventBridge
+- Deploy and integrate the Phase 8 SQS, DLQ, alarms, and EventBridge Scheduler resources
 - Secrets Manager or Parameter Store
 - Explicit migration task
 - CloudWatch log groups, retention, metrics, and basic alarms
 - Least-privilege IAM and network rules
+
+Implemented artifacts include an immutable/scanned ECR repository, shared SNS alarm topic, the Phase 8 queue stack with optional alarm actions, and an ECS/RDS/ALB application stack. The application stack supplies distinct web, worker, and migration task definitions from one image; private application and database subnets; TLS-only application traffic; RDS-managed credentials; JSON-key Secrets Manager injection; retained logs; and basic alarms. Web and worker desired counts default to zero, real worker delivery defaults off, and the Scheduler remains disabled for the initial rollout.
+
+The operator runbook in `docs/deployment.md` sequences image publication, queue creation, zero-capacity infrastructure deployment, secret configuration, migration, health verification, service startup, and final Scheduler enablement. Local template syntax is validated. AWS-side template validation and live resource creation require an explicitly chosen account, region, domain/certificate, notification destination, and cost authorization and remain pending.
 
 ## Deferred Unless Time Remains
 

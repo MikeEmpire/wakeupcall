@@ -25,9 +25,9 @@ class DemoMessageSender:
 
     def send(self, *, channel: str, to: str, message: str) -> DeliveryResult:
         logger.info(
-            "Demo delivery suppressed: channel=%s to=%s message=%s",
+            "Demo delivery suppressed: channel=%s to=%s message_length=%s",
             channel,
             mask_phone_number(to),
-            message,
+            len(message),
         )
         return DeliveryResult()

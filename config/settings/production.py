@@ -6,8 +6,13 @@ DEBUG = False
 SECRET_KEY = env("DJANGO_SECRET_KEY")  # noqa: F405
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS")  # noqa: F405
 
-if not env("DATABASE_URL", default=None):  # noqa: F405
-    raise ImproperlyConfigured("DATABASE_URL is required in production")
+if not DATABASE_URL and not all(  # noqa: F405
+    (DATABASE_HOST, DATABASE_NAME, DATABASE_USER, DATABASE_PASSWORD)  # noqa: F405
+):
+    raise ImproperlyConfigured(
+        "Production requires DATABASE_URL or all of DATABASE_HOST, "
+        "DATABASE_NAME, DATABASE_USER, and DATABASE_PASSWORD."
+    )
 
 SECURE_SSL_REDIRECT = env.bool("DJANGO_SECURE_SSL_REDIRECT", default=True)  # noqa: F405
 SESSION_COOKIE_SECURE = True

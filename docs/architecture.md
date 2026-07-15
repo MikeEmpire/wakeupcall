@@ -19,27 +19,45 @@ The repository is one Django project with four local applications:
 | App | Current responsibility |
 | --- | --- |
 | `accounts` | Custom user, owned phone numbers, verification services, and Twilio Verify adapter |
-| `scheduling` | One-time scheduled events and their lifecycle |
-| `delivery` | Delivery attempts, announcement rendering, sender boundary, Twilio SMS/Voice adapters, authenticated callback handling, and synchronous orchestration |
+| `scheduling` | One-time scheduled events, authenticated owner-scoped API, cancellation service, admin action, lifecycle, and deterministic scenario seeding |
+| `delivery` | Delivery attempts, due-event publication and claiming, SQS transport/worker, announcement rendering, Twilio adapters, callback handling, and orchestration |
 | `weather` | Normalized weather value object, provider boundary, deterministic fake, and WeatherAPI.com REST adapter |
 
-The current executable flow is synchronous. Demo events use the suppression sender; explicitly authorized staging commands can use Twilio senders for due non-demo events:
+The current system supports both the direct bounded command and an SQS worker path. Queue processing is demo-only by default; real events require a separate environment gate and explicit worker flag. Single-event staging commands remain available for isolated provider smoke tests:
 
 ```text
-demo / staging SMS / staging Voice command
+dispatcher / staging SMS / staging Voice command
           |
           v
-delivery service --atomic claim--> ScheduledEvent + DeliveryAttempt
+bounded due query --atomic SKIP LOCKED claim--> ScheduledEvent + DeliveryAttempt
           |
           +--> WeatherProvider --> FakeWeatherProvider
           |
           +--> announcement renderer
           |
-          +--> DemoMessageSender --> masked console log
+          +--> DemoMessageSender --> masked metadata log
           |    or TwilioSmsSender --> Twilio Messages API
           |    or TwilioVoiceSender --> Twilio Calls API
           |
           +--atomic finalize--> suppressed or submitted attempt and event
+```
+
+The queue path is:
+
+```text
+EventBridge Scheduler (rate 1 minute)
+          |
+          v
+SQS Standard: dispatch_due_events v1 envelope
+          |
+          v
+long-polling worker --bounded due-ID query--> SQS delivery v1 envelopes
+          |                                      |
+          +<-------------------------------------+
+          |
+          +--atomic row claim--> authoritative ScheduledEvent + new attempt
+          +--outside transaction--> weather, render, demo/Twilio sender
+          +--atomic finalize--> suppressed / submitted / failed
 ```
 
 Key files:
@@ -57,11 +75,15 @@ Key files:
 
 The delivery service locks the event row while claiming it, moves it from `scheduled` to `processing`, and creates an attempt. External work occurs after that transaction commits, so database locks are not held during provider calls. Final success or failure is recorded in a second transaction.
 
+`dispatch_due_events` orders due rows by scheduled time and ID, locks at most the configured batch size with PostgreSQL `SKIP LOCKED`, and then executes each claimed delivery independently. The default batch size is 25 and the hard maximum is 100. Events strictly more than the default 15-minute grace window late are failed as missed inside the claim transaction and never call a provider. Cancellation and claiming lock the same event row, giving one legal winner under concurrency.
+
 Terminal events return their latest attempt when delivery is requested again. This supplies basic idempotent behavior for duplicate invocations. A concurrent event already in `processing` is rejected rather than delivered twice.
 
 ### Current failure behavior
 
-All provider or rendering exceptions currently mark the event and attempt as `failed` and re-raise the exception. Retry classification and stuck-processing recovery do not exist yet. This is adequate for the fake synchronous slice but must be revisited before queue processing.
+The direct dispatcher still makes all execution exceptions terminal. The SQS worker automatically retries only exceptions explicitly classified retryable before the sender boundary, currently transient WeatherAPI failures. Each failed receive creates an immutable failed attempt while the event remains `processing`; a later receive creates the next attempt under the same row lock. The third failed receive marks the event failed and leaves the message for DLQ redrive. Permanent pre-send failures are audited and acknowledged.
+
+Once execution enters `MessageSender`, every exception is terminal and acknowledged even if its exception class otherwise advertises retryability. A timeout may hide provider acceptance, so replay could duplicate an SMS or call. A crash with a processing attempt remains quarantined and eventually surfaces through the DLQ alarm rather than being automatically replayed.
 
 ### Current configuration
 
@@ -72,6 +94,38 @@ All provider or rendering exceptions currently mark the event and attempt as `fa
 - Console logging suitable for later ECS forwarding
 - Django Admin registration for current entities
 - `GET /health/` performs a lightweight process health check
+- Production accepts either `DATABASE_URL` or discrete PostgreSQL settings so ECS can inject the RDS-managed password as a Secrets Manager JSON key without putting a resolved password in a task definition
+
+### Deployment artifacts
+
+Phase 10 adds deployment-ready CloudFormation without claiming a live environment:
+
+- `phase10-ecr.yaml` creates an encrypted immutable ECR repository with scan-on-push, bounded image retention, and an SNS alarm topic with an optional email subscription.
+- `phase8-queue.yaml` retains the queue/DLQ/Scheduler boundary and can route both queue alarms to the shared topic.
+- `phase10-application.yaml` creates a two-AZ VPC layout, public ALB, private Fargate web/worker/migration tasks, private RDS PostgreSQL, Secrets Manager configuration, retained CloudWatch logs, basic alarms, and optional Route 53 alias.
+
+The same immutable image is used for all task definitions. The web command runs Gunicorn, the worker command runs the existing queue worker, and migration is an explicit one-shot task. Task IAM roles separate web access from the worker's queue permissions. The ECS execution role can read only the generated application secret and the RDS-managed database secret.
+
+ALB target checks use a task private IP in the HTTP `Host` header. Narrow first middleware answers only `/health/` requests carrying ALB's documented `ELB-HealthChecker/2.0` user agent, before Django host and HTTPS enforcement. Normal application traffic still uses the configured public-domain allowlist and TLS redirect; the target group accepts only HTTP 200.
+
+For safe initial rollout, web and worker desired counts are zero, the Scheduler is disabled, and real worker delivery is false. The runbook requires secret configuration and a successful migration before services start, then demo verification before Scheduler enablement. One NAT Gateway is an explicit staging cost tradeoff and a single-AZ outbound dependency; RDS Multi-AZ and deletion protection remain opt-in parameters.
+
+### Authenticated event API
+
+The minimal DRF surface is mounted under `/api/`:
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| `GET` | `/api/events/` | Paginated, scheduled-time-ordered events owned by the authenticated user |
+| `POST` | `/api/events/` | Create one future demo event for an owned verified phone record |
+| `GET` | `/api/events/{id}/` | Retrieve one owned event |
+| `POST` | `/api/events/{id}/cancel/` | Row-locked cancellation from `scheduled` only |
+
+Basic authentication is first so unauthenticated API requests receive `401`; session authentication also supports the Django-admin/browser context. Basic authentication is limited to this exercise/testing surface and requires TLS. A production deployment must explicitly choose session-based browser access or a managed/token authentication design. There is no registration, login-token issuance, phone-management, or verification endpoint in this slice.
+
+Serializers expose lifecycle timestamps, status, channel, ZIP code, demo state, and phone record ID. Full phone numbers, rendered announcements, weather audit payloads, delivery attempts, and provider identifiers are outside this user-facing representation. Creation is delegated to a transactional application service that re-locks and revalidates the verified phone immediately before saving. Cancellation uses the same event row-locking service as administrative workflows.
+
+Django Admin retains operational visibility with lifecycle fields read-only. Its controlled bulk-cancel action calls the cancellation service and skips events that are no longer scheduled rather than assigning statuses directly.
 
 ## Service Boundaries
 
@@ -120,6 +174,22 @@ Twilio SDK logging is pinned to `WARNING` so its request/response diagnostics ca
 
 `send_staging_voice_event` applies equivalent separate controls with `TWILIO_VOICE_SMOKE_ENABLED`, `TWILIO_VOICE_SMOKE_TO_NUMBER`, and `--confirm-call`. It rejects demo and SMS events before adapter construction.
 
+### Local due-event dispatcher
+
+`dispatch_due_events` processes one bounded batch. It uses deterministic fake weather and is demo-only unless `DELIVERY_REAL_DISPATCH_ENABLED=true` and `--allow-real-delivery` are both supplied. The real sender is lazy and channel-aware, so demo-only runs cannot construct or call a Twilio adapter. Output and failure logs contain event identifiers, counts, and exception classes only.
+
+`seed_scheduling_scenarios` safely replaces only a reserved seed user's data with exactly 30 events spanning due, future, missed, terminal, cancelled, and stale-processing states; both channels; and demo versus real safety behavior. Its phone number and provider identifiers are synthetic.
+
+### SQS and scheduler boundary
+
+`QueueEnvelope` version 1 supports a scheduler tick and an identifier-only event delivery message. Strict parsing rejects unknown versions, types, extra fields, and invalid identifiers. Message bodies and receipt handles are never logged.
+
+`SqsDeliveryQueue` keeps boto3 objects and AWS error details inside the adapter. It applies bounded connect/read timeouts, receives at most ten messages with up to 20 seconds of long polling, maps AWS failures to safe project errors, deletes acknowledged messages, and changes visibility for retries.
+
+`run_delivery_worker` long-polls continuously or once with `--once`. A scheduler tick publishes one bounded oldest-first set of IDs. Publication does not claim or mutate events, eliminating a claimed-before-publish loss window; a failed or repeated tick can publish duplicates, which worker row locking handles. Real queue delivery requires `DELIVERY_REAL_WORKER_ENABLED=true` and `--allow-real-delivery`.
+
+`infra/aws/phase8-queue.yaml` defines the Standard queue, encrypted 14-day DLQ, three-receive redrive policy, 120-second visibility timeout, 20-second long polling, disabled-by-default one-minute EventBridge Scheduler, least-privilege scheduler role, and CloudWatch alarms for DLQ depth and queue age. It is a focused transport template, not a deployed environment or full ECS/RDS stack.
+
 ### Voice status callbacks
 
 `POST /twilio/voice/status/` is a narrow provider endpoint, not a user-facing API. CSRF is replaced by Twilio signature validation using the configured canonical HTTPS callback URL and auth token. Invalid signatures fail before payload processing. Accepted form fields are limited to Call SID, Call Status, and Sequence Number; raw bodies and phone-number callback fields are neither stored nor logged.
@@ -128,9 +198,9 @@ The callback service locks the submitted voice attempt by Call SID. Newer sequen
 
 ### Delivery service
 
-Responsible for claiming an event, retrieving weather, rendering the announcement, selecting the demo or real sender, and recording an attempt. It is not responsible for scanning due events, polling queues, or configuring vendor clients.
+Responsible for scanning and claiming one bounded due-event batch, retrieving weather, rendering announcements, selecting the demo or real sender, and recording attempts. It is not responsible for polling queues or configuring vendor clients.
 
-## Target Architecture — Planned
+## Target Deployment Architecture — Artifacts Implemented, Not Deployed
 
 ```text
 Browser / API client
@@ -152,26 +222,25 @@ Twilio status callback ---> Django web <------------+
 Container stdout/stderr --------------------> CloudWatch Logs
 ```
 
-Planned components:
+Deployment artifacts cover:
 
 - Django web Fargate service behind an Application Load Balancer
 - Worker Fargate service using the same image with a different command
 - RDS PostgreSQL as the source of truth
-- SQS Standard queue with a dead-letter queue
-- EventBridge minute tick to initiate due-event dispatch
+- Deployment of the implemented SQS Standard queue, dead-letter queue, alarms, and Scheduler tick
 - Real weather REST adapter with bounded timeouts (implemented locally; deployment configuration remains planned)
 - Twilio Verify, SMS, and Voice adapters (implemented locally)
 - Authenticated Twilio Voice status callbacks (implemented locally)
 - CloudWatch logs, basic metrics, and alarms
-- Secrets Manager or Parameter Store for secrets
+- Secrets Manager for application and RDS credentials
 
-## Planned Scheduling and Queue Design
+## Implemented Scheduling and Queue Design
 
-PostgreSQL remains authoritative for schedules. EventBridge should emit a periodic tick rather than create one AWS schedule per event. A dispatcher will atomically claim due rows in bounded batches and publish event IDs to SQS.
+PostgreSQL remains authoritative for schedules. EventBridge Scheduler emits a periodic tick rather than creating one schedule per event. The worker expands that tick into a bounded batch of event IDs without changing database state, so there is no database claim that can be stranded by a failed SQS publish.
 
-SQS Standard is at-least-once. Messages should contain an event ID and message type only. Workers must reload and claim the event before provider calls.
+SQS Standard is at-least-once. Delivery messages contain an event ID, message type, and schema version only. Workers reload and claim the event before provider calls. Duplicate publication is expected and safe at the database claim boundary.
 
-A database-to-SQS dual-write gap will remain in the simple design. Duplicate publication is acceptable because delivery is idempotent. A transactional outbox is deferred unless the exercise explicitly demands stronger publication guarantees.
+A failed tick publication leaves events `scheduled`, so the next minute can try again. Partial publication may duplicate earlier IDs on the next tick. A transactional outbox remains deferred because this design favors safe duplication over a state-changing dual write.
 
 ## Known Delivery Ambiguity
 

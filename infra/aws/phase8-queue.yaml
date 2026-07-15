@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Wakeup Call Phase 8 delivery queue, DLQ, alarms, and minute tick.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: staging
+  ScheduleState:
+    Type: String
+    Default: DISABLED
+    AllowedValues: [ENABLED, DISABLED]
+  AlarmTopicArn:
+    Type: String
+    Default: ""
+    Description: Optional existing SNS topic ARN for queue alarm actions.
+
+Conditions:
+  HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, ""]]
+
+Resources:
+  DeliveryDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub wakeup-call-${EnvironmentName}-delivery-dlq
+      KmsMasterKeyId: alias/aws/sqs
+      MessageRetentionPeriod: 1209600
+
+  DeliveryQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub wakeup-call-${EnvironmentName}-delivery
+      KmsMasterKeyId: alias/aws/sqs
+      MessageRetentionPeriod: 345600
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 120
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeliveryDeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SendDispatcherTick
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt DeliveryQueue.Arn
+
+  DispatcherSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Publish one due-event dispatcher tick every minute.
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      ScheduleExpression: rate(1 minute)
+      State: !Ref ScheduleState
+      Target:
+        Arn: !GetAtt DeliveryQueue.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"type":"dispatch_due_events","version":1}'
+
+  DeadLetterMessagesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Delivery messages are present in the DLQ.
+      AlarmActions: !If
+        - HasAlarmTopic
+        - [!Ref AlarmTopicArn]
+        - !Ref "AWS::NoValue"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeliveryDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  OldestMessageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Delivery queue processing is more than five minutes behind.
+      AlarmActions: !If
+        - HasAlarmTopic
+        - [!Ref AlarmTopicArn]
+        - !Ref "AWS::NoValue"
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeliveryQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 300
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  DeliveryQueueUrl:
+    Value: !Ref DeliveryQueue
+  DeliveryQueueArn:
+    Value: !GetAtt DeliveryQueue.Arn
+  DeliveryDeadLetterQueueArn:
+    Value: !GetAtt DeliveryDeadLetterQueue.Arn
+  DispatcherScheduleName:
+    Value: !Ref DispatcherSchedule

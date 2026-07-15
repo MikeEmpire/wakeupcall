@@ -32,3 +32,7 @@ class DeliveryProviderUnavailable(DeliveryError):
 
 class DeliveryMalformedResponse(DeliveryError):
     retryable = True
+
+
+class MissedDeliveryWindow(DeliveryError):
+    pass

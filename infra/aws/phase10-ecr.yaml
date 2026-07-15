@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Wakeup Call immutable application image repository.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: staging
+    AllowedPattern: "[a-z0-9-]+"
+  AlarmNotificationEmail:
+    Type: String
+    Default: ""
+    Description: Optional email endpoint; AWS requires subscription confirmation.
+
+Conditions:
+  CreateEmailSubscription: !Not [!Equals [!Ref AlarmNotificationEmail, ""]]
+
+Resources:
+  ApplicationRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub wakeup-call-${EnvironmentName}
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep the twenty newest images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 20
+                },
+                "action": {"type": "expire"}
+              }
+            ]
+          }
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub wakeup-call-${EnvironmentName}-alarms
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: CreateEmailSubscription
+    Properties:
+      Endpoint: !Ref AlarmNotificationEmail
+      Protocol: email
+      TopicArn: !Ref AlarmTopic
+
+Outputs:
+  RepositoryArn:
+    Value: !GetAtt ApplicationRepository.Arn
+  RepositoryUri:
+    Value: !GetAtt ApplicationRepository.RepositoryUri
+  AlarmTopicArn:
+    Value: !Ref AlarmTopic
