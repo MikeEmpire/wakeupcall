@@ -153,7 +153,7 @@ TWILIO_SMS_FROM_NUMBER=+1XXXXXXXXXX
 
 In the selected active number's Messaging configuration, set **A message comes in** to a webhook using HTTP `POST` and `https://wakeupcall.afam.app/twilio/sms/inbound/`. The Voice action URL is not configured on the phone-number page: the worker embeds it in the outbound call's `<Gather>` TwiML. The Voice status URL is supplied when the application creates the outbound call.
 
-The web task requires `TWILIO_VOICE_ACTION_CALLBACK_URL`, `TWILIO_SMS_INBOUND_CALLBACK_URL`, and `TWILIO_SMS_FROM_NUMBER`. The worker requires `TWILIO_VOICE_ACTION_CALLBACK_URL` so it can render the menu TwiML. The current Phase 10 task definitions do not yet inject all of these values; update and validate the template before deploying the Phase 14/15 image.
+The web task requires `TWILIO_VOICE_ACTION_CALLBACK_URL`, `TWILIO_SMS_INBOUND_CALLBACK_URL`, and `TWILIO_SMS_FROM_NUMBER`. The worker requires `TWILIO_VOICE_ACTION_CALLBACK_URL` so it can render the menu TwiML. The Phase 10 template injects both callback URLs into the web task, injects the Voice action URL into the worker task, and reads the web task's SMS sender number from the existing application secret. These updated task definitions and the latest Phase 14/15 image are not live until an operator performs the rollout.
 
 ## 8. Run and verify the migration task
 

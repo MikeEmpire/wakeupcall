@@ -9,6 +9,12 @@ def _template(name):
     return (AWS_INFRA / name).read_text()
 
 
+def _resource(template, name, next_name):
+    return template.split(f"  {name}:\n", maxsplit=1)[1].split(
+        f"  {next_name}:\n", maxsplit=1
+    )[0]
+
+
 def test_foundation_uses_immutable_scanned_images_and_alarm_topic():
     template = _template("phase10-ecr.yaml")
 
@@ -46,6 +52,61 @@ def test_task_secrets_use_secrets_manager_json_keys():
     assert "${ApplicationSecret}:DJANGO_SECRET_KEY::" in template
     assert "${SecretArn}:password::" in template
     assert "TWILIO_AUTH_TOKEN" in template
+
+
+def test_web_task_receives_twilio_callback_configuration_and_sms_sender_secret():
+    template = _template("phase10-application.yaml")
+    web_task = _resource(template, "WebTaskDefinition", "WorkerTaskDefinition")
+
+    assert (
+        "- Name: TWILIO_VOICE_STATUS_CALLBACK_URL\n"
+        "              Value: !Sub https://${ApplicationDomain}/twilio/voice/status/"
+        in web_task
+    )
+    assert (
+        "- Name: TWILIO_VOICE_ACTION_CALLBACK_URL\n"
+        "              Value: !Sub https://${ApplicationDomain}/twilio/voice/action/"
+        in web_task
+    )
+    assert (
+        "- Name: TWILIO_SMS_INBOUND_CALLBACK_URL\n"
+        "              Value: !Sub https://${ApplicationDomain}/twilio/sms/inbound/"
+        in web_task
+    )
+    assert (
+        "- Name: TWILIO_SMS_FROM_NUMBER\n"
+        '              ValueFrom: !Sub "${ApplicationSecret}:'
+        'TWILIO_SMS_FROM_NUMBER::"'
+        in web_task
+    )
+
+
+def test_worker_task_receives_voice_callback_configuration_only():
+    template = _template("phase10-application.yaml")
+    worker_task = _resource(template, "WorkerTaskDefinition", "MigrationTaskDefinition")
+
+    assert (
+        "- Name: TWILIO_VOICE_STATUS_CALLBACK_URL\n"
+        "              Value: !Sub https://${ApplicationDomain}/twilio/voice/status/"
+        in worker_task
+    )
+    assert (
+        "- Name: TWILIO_VOICE_ACTION_CALLBACK_URL\n"
+        "              Value: !Sub https://${ApplicationDomain}/twilio/voice/action/"
+        in worker_task
+    )
+    assert "TWILIO_SMS_INBOUND_CALLBACK_URL" not in worker_task
+
+
+def test_twilio_credentials_remain_secret_references_not_plaintext_environment():
+    template = _template("phase10-application.yaml")
+    web_task = _resource(template, "WebTaskDefinition", "WorkerTaskDefinition")
+    worker_task = _resource(template, "WorkerTaskDefinition", "MigrationTaskDefinition")
+
+    assert 'ValueFrom: !Sub "${ApplicationSecret}:TWILIO_AUTH_TOKEN::"' in web_task
+    assert 'ValueFrom: !Sub "${ApplicationSecret}:TWILIO_AUTH_TOKEN::"' in worker_task
+    assert "- Name: TWILIO_AUTH_TOKEN\n              Value:" not in web_task
+    assert "- Name: TWILIO_AUTH_TOKEN\n              Value:" not in worker_task
 
 
 def test_phase8_scheduler_and_real_worker_remain_disabled_by_default():

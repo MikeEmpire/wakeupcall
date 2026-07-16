@@ -56,6 +56,19 @@ The Phase 15 validation result is:
 
 The earlier Phase 14 Docker, CloudFormation, staging health, alarm, and demo-only SQS validation remains unchanged; Phase 15 did not alter those artifacts or enable provider delivery.
 
+Phase 16 now wires the callback configuration locally. Docker Compose passes through the Voice action and inbound SMS callback URLs while retaining the SMS sender number. The Phase 10 application template derives both web callback URLs and the worker's Voice action URL from `ApplicationDomain`, and injects the web task's SMS sender number from the existing application secret. The latest Phase 14/15 image and these updated task definitions have not been deployed; an operator rollout is still required, and no live callback smoke has occurred.
+
+The local callback-wiring validation result is:
+
+- `python manage.py check`: passed with a temporary SQLite override
+- `python manage.py makemigrations --check`: passed with a temporary SQLite override
+- `pytest tests/test_aws_templates.py`: 8 passed
+- `pytest`: 353 passed, 7 PostgreSQL-only tests skipped with a temporary SQLite override
+- `ruff check .`: passed
+- `docker compose config --quiet`: passed
+- all three CloudFormation templates parsed as YAML and passed read-only AWS validation in `us-east-1`
+- `git diff --check`: passed
+
 No public registration, token issuance endpoint, or SMS delivery-status callback exists. Staff can provision existing users through Django Admin. The operator has manually exercised sign-in, phone enrollment/verification, and event scheduling, and confirmed the credentialed weather smoke command succeeds. A live Twilio SMS smoke to a physical US handset reached the Messages API, returned a Message SID, and produced local `submitted` state; Twilio later reported `undelivered` with error `30034` because the US 10DLC sender is not attached to an approved A2P campaign. A second live smoke to Twilio's Virtual Phone also returned a valid Message SID and produced a fully audited local `submitted` attempt without error, providing a carrier-independent demonstration while A2P approval remains pending. Voice and interaction callbacks retain deterministic mocked coverage but have not been live-smoke-tested.
 
 ## Next Recommended Slice
@@ -176,7 +189,7 @@ This places a real call and has not been run in this repository session. Both ca
 - Twilio SMS API submission is live-smoke-tested to both a physical destination and Twilio's Virtual Phone. The Virtual Phone request returned a valid Message SID and a fully audited local `submitted` attempt; inbox visibility still requires operator confirmation in Twilio Console. Successful physical carrier delivery remains pending Sole Proprietor A2P 10DLC registration and campaign association for the purchased sender.
 - Twilio Voice submission and signed callbacks have mocked coverage but have not been live-smoke-tested with a public HTTPS callback URL and authorized staging number.
 - Twilio inbound SMS has deterministic signed-request and PostgreSQL concurrency coverage but has not been live-smoke-tested. Provider-side inbound webhook configuration, Advanced Opt-Out behavior, and carrier compliance require separate manual verification.
-- `TWILIO_VOICE_ACTION_CALLBACK_URL` and `TWILIO_SMS_INBOUND_CALLBACK_URL` are constructed from the public application domain; they are not issued by Twilio. `TWILIO_SMS_FROM_NUMBER` is the SMS-capable E.164 number listed in Twilio Console. The current Phase 10 task definitions do not inject all three values where required; Phase 16 must update the web/worker configuration before deployed interaction smoke tests.
+- `TWILIO_VOICE_ACTION_CALLBACK_URL` and `TWILIO_SMS_INBOUND_CALLBACK_URL` are constructed from the public application domain; they are not issued by Twilio. `TWILIO_SMS_FROM_NUMBER` is the SMS-capable E.164 number listed in Twilio Console. Local Compose and Phase 10 task-definition wiring is complete, but the latest image and updated task definitions still require an operator rollout before deployed interaction smoke tests.
 - The API relies on existing users; registration and token issuance are not exposed.
 - DRF's cache-backed verification throttles are approximate and process-local with the current default cache. A multi-process deployment needing a strict shared abuse or billing boundary requires a shared cache or database-backed policy.
 - HTTP Basic authentication is suitable for this bounded exercise/testing surface only and requires TLS; production deployment should explicitly choose session-based browser access or a managed/token authentication design.

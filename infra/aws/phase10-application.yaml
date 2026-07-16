@@ -477,6 +477,10 @@ Resources:
               Value: !Ref AWS::Region
             - Name: TWILIO_VOICE_STATUS_CALLBACK_URL
               Value: !Sub https://${ApplicationDomain}/twilio/voice/status/
+            - Name: TWILIO_VOICE_ACTION_CALLBACK_URL
+              Value: !Sub https://${ApplicationDomain}/twilio/voice/action/
+            - Name: TWILIO_SMS_INBOUND_CALLBACK_URL
+              Value: !Sub https://${ApplicationDomain}/twilio/sms/inbound/
           Secrets:
             - Name: DJANGO_SECRET_KEY
               ValueFrom: !Sub "${ApplicationSecret}:DJANGO_SECRET_KEY::"
@@ -486,6 +490,8 @@ Resources:
                 - SecretArn: !GetAtt Database.MasterUserSecret.SecretArn
             - Name: TWILIO_AUTH_TOKEN
               ValueFrom: !Sub "${ApplicationSecret}:TWILIO_AUTH_TOKEN::"
+            - Name: TWILIO_SMS_FROM_NUMBER
+              ValueFrom: !Sub "${ApplicationSecret}:TWILIO_SMS_FROM_NUMBER::"
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -535,6 +541,8 @@ Resources:
               Value: !Ref EnableRealWorkerDelivery
             - Name: TWILIO_VOICE_STATUS_CALLBACK_URL
               Value: !Sub https://${ApplicationDomain}/twilio/voice/status/
+            - Name: TWILIO_VOICE_ACTION_CALLBACK_URL
+              Value: !Sub https://${ApplicationDomain}/twilio/voice/action/
           Secrets:
             - Name: DJANGO_SECRET_KEY
               ValueFrom: !Sub "${ApplicationSecret}:DJANGO_SECRET_KEY::"
