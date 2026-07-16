@@ -64,3 +64,47 @@ def test_production_rejects_incomplete_database_settings():
 
     assert result.returncode != 0
     assert "Production requires DATABASE_URL or all of" in result.stderr
+
+
+def test_production_static_assets_use_whitenoise():
+    environment = {
+        **os.environ,
+        "DJANGO_SETTINGS_MODULE": "config.settings.production",
+        "DJANGO_SECRET_KEY": "test-only-secret-key",
+        "DJANGO_ALLOWED_HOSTS": "example.test",
+        "DATABASE_URL": "sqlite:///:memory:",
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json; from django.conf import settings; "
+                "print(json.dumps({'middleware': settings.MIDDLEWARE, "
+                "'static_backend': settings.STORAGES['staticfiles']['BACKEND']}))"
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    configuration = json.loads(result.stdout)
+    security_index = configuration["middleware"].index(
+        "django.middleware.security.SecurityMiddleware"
+    )
+    assert configuration["middleware"][security_index + 1] == (
+        "whitenoise.middleware.WhiteNoiseMiddleware"
+    )
+    assert configuration["static_backend"] == (
+        "whitenoise.storage.CompressedManifestStaticFilesStorage"
+    )
+
+
+def test_container_build_collects_static_assets():
+    dockerfile = (ROOT / "Dockerfile").read_text()
+
+    assert "RUN python manage.py collectstatic --noinput" in dockerfile

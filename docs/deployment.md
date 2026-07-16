@@ -4,7 +4,7 @@
 
 Phase 10 supplied the CloudFormation and operator sequence used for the live staging deployment in `us-east-1`. The `wakeup-call-staging-foundation`, `wakeup-call-staging-queue`, and `wakeup-call-staging-application` stacks are deployed. Cloudflare provides DNS for `wakeupcall.afam.app`, the ACM certificate is issued, and the public TLS health endpoint is live. The templates create billable ECR, SNS, SQS, EventBridge Scheduler, NAT Gateway, ALB, ECS/Fargate, RDS, Secrets Manager, and CloudWatch resources; Route 53 remains optional.
 
-The currently deployed image is the immutable `b1d7d4fb93a689e17e3f2ce2e0518b80c364c375` tag. Later application phases must be built, migrated, and deployed before their behavior can be claimed in staging.
+The currently deployed image is the immutable `0c00f5935001115ed12e3d6e0d542bdaa9bdc5d4` tag. Its migration task completed successfully, and the Phase 14/15 application behavior plus Phase 16 callback task wiring are live in staging.
 
 The application behavior is unchanged. One image runs as three explicit ECS task definitions:
 
@@ -153,7 +153,7 @@ TWILIO_SMS_FROM_NUMBER=+1XXXXXXXXXX
 
 In the selected active number's Messaging configuration, set **A message comes in** to a webhook using HTTP `POST` and `https://wakeupcall.afam.app/twilio/sms/inbound/`. The Voice action URL is not configured on the phone-number page: the worker embeds it in the outbound call's `<Gather>` TwiML. The Voice status URL is supplied when the application creates the outbound call.
 
-The web task requires `TWILIO_VOICE_ACTION_CALLBACK_URL`, `TWILIO_SMS_INBOUND_CALLBACK_URL`, and `TWILIO_SMS_FROM_NUMBER`. The worker requires `TWILIO_VOICE_ACTION_CALLBACK_URL` so it can render the menu TwiML. The Phase 10 template injects both callback URLs into the web task, injects the Voice action URL into the worker task, and reads the web task's SMS sender number from the existing application secret. These updated task definitions and the latest Phase 14/15 image are not live until an operator performs the rollout.
+The web task requires `TWILIO_VOICE_ACTION_CALLBACK_URL`, `TWILIO_SMS_INBOUND_CALLBACK_URL`, and `TWILIO_SMS_FROM_NUMBER`. The worker requires `TWILIO_VOICE_ACTION_CALLBACK_URL` so it can render the menu TwiML. The Phase 10 template injects both callback URLs into the web task, injects the Voice action URL into the worker task, and reads the web task's SMS sender number from the existing application secret. These task definitions are deployed in staging. The Twilio SMS-capable number is configured to send inbound messages to the HTTPS inbound callback with `POST`; a live inbound-message smoke remains an explicit manual action.
 
 ## 8. Run and verify the migration task
 

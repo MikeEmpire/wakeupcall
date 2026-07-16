@@ -20,7 +20,7 @@ Phase 15 adds a signed inbound SMS webhook with the bounded commands `STOP`, `SM
 
 Phase 10 is live in the staging AWS account in `us-east-1`. The `wakeup-call-staging-foundation`, `wakeup-call-staging-queue`, and `wakeup-call-staging-application` CloudFormation stacks create the immutable ECR repository, shared SNS alarm topic, encrypted SQS/DLQ transport, two-AZ VPC, public TLS ALB, private Fargate tasks, private encrypted RDS PostgreSQL, Secrets Manager configuration, retained log groups, and basic alarms. Cloudflare DNS routes `wakeupcall.afam.app` to the ALB, and the ACM certificate is issued.
 
-Image commit `b1d7d4fb93a689e17e3f2ce2e0518b80c364c375` was built for `linux/amd64`, pushed under its full commit tag, and deployed to all task definitions. The migration task completed with exit code 0. Web and worker are each steady at one running task, the ALB target is healthy, and `https://wakeupcall.afam.app/health/` returns HTTP 200. Provider configuration is stored in the generated application secret; Voice remains unset because `TWILIO_VOICE_FROM_NUMBER` has not been configured.
+Image commit `0c00f5935001115ed12e3d6e0d542bdaa9bdc5d4` was built for `linux/amd64`, pushed under its full commit tag, and deployed to task-definition revisions web `2`, worker `2`, and migration `2`. The migration task completed with exit code 0 on image digest `sha256:c91c12c046023fdae86c95d20c8578513587c2a7280b5add5a11c869c36242ee`. Web and worker are each steady at one running task, the ALB target is healthy, and `https://wakeupcall.afam.app/health/` returns HTTP 200. Provider configuration is stored in the generated application secret; the SMS-capable Twilio number is also configured as the Voice sender, and the worker was force-deployed to load the new secret version.
 
 The SNS email subscription is confirmed and received an intentional non-sensitive test notification. The one-minute EventBridge Scheduler is enabled. An automatic tick processed the deterministic staging scenarios with the real-delivery gate still false: six due demo events became `suppressed`, four missed demo events failed locally, four due real events remained `scheduled`, and no demo attempt had a provider SID. The queue drained afterward and all five alarms remained `OK`.
 
@@ -56,7 +56,7 @@ The Phase 15 validation result is:
 
 The earlier Phase 14 Docker, CloudFormation, staging health, alarm, and demo-only SQS validation remains unchanged; Phase 15 did not alter those artifacts or enable provider delivery.
 
-Phase 16 now wires the callback configuration locally. Docker Compose passes through the Voice action and inbound SMS callback URLs while retaining the SMS sender number. The Phase 10 application template derives both web callback URLs and the worker's Voice action URL from `ApplicationDomain`, and injects the web task's SMS sender number from the existing application secret. The latest Phase 14/15 image and these updated task definitions have not been deployed; an operator rollout is still required, and no live callback smoke has occurred.
+Phase 16 wires and deploys the callback configuration. Docker Compose passes through the Voice action and inbound SMS callback URLs while retaining the SMS sender number. The deployed Phase 10 application task definitions derive both web callback URLs and the worker's Voice action URL from `ApplicationDomain`, and inject the web task's SMS sender number from the existing application secret. The Twilio SMS-capable number now posts inbound messages to the deployed HTTPS callback. No live inbound SMS or Voice callback smoke has occurred.
 
 The local callback-wiring validation result is:
 
@@ -69,11 +69,24 @@ The local callback-wiring validation result is:
 - all three CloudFormation templates parsed as YAML and passed read-only AWS validation in `us-east-1`
 - `git diff --check`: passed
 
+The staging rollout result is:
+
+- immutable image tag `0c00f5935001115ed12e3d6e0d542bdaa9bdc5d4` was pushed to ECR
+- the Scheduler was disabled during rollout and restored to `ENABLED` at one-minute cadence
+- application and queue stacks finished `UPDATE_COMPLETE`; real worker delivery remains `false`
+- migration task exited 0; web and worker each reached one stable running task
+- public health returned HTTP 200 and all three callback routes returned the expected HTTP 405 for GET
+- the delivery queue and DLQ drained to zero and all five alarms remained `OK`
+- a fresh deterministic seed tick published ten identifiers, suppressed six due demo deliveries, and left zero demo provider SIDs
+- final synthetic matrix: nine demo `suppressed`, seven demo `failed`, four demo `scheduled`, two demo `cancelled`, one demo `processing`, four real `scheduled`, and three real `submitted`
+- Twilio inbound SMS webhook configuration was updated successfully; live inbound SMS and Voice callback smokes remain unperformed
+- `TWILIO_VOICE_FROM_NUMBER` was populated with the verified Voice-capable Twilio sender and the worker replacement deployment reached steady state; real delivery remains disabled
+
 No public registration, token issuance endpoint, or SMS delivery-status callback exists. Staff can provision existing users through Django Admin. The operator has manually exercised sign-in, phone enrollment/verification, and event scheduling, and confirmed the credentialed weather smoke command succeeds. A live Twilio SMS smoke to a physical US handset reached the Messages API, returned a Message SID, and produced local `submitted` state; Twilio later reported `undelivered` with error `30034` because the US 10DLC sender is not attached to an approved A2P campaign. A second live smoke to Twilio's Virtual Phone also returned a valid Message SID and produced a fully audited local `submitted` attempt without error, providing a carrier-independent demonstration while A2P approval remains pending. Voice and interaction callbacks retain deterministic mocked coverage but have not been live-smoke-tested.
 
 ## Next Recommended Slice
 
-Implement Phase 16: Submission and Operations Polish exactly as scoped in `docs/roadmap.md`.
+Finish the remaining Phase 16 operations work: replace the bootstrap IAM user's direct `AdministratorAccess` with a reviewed bounded deployment/operator policy, decide and document the post-review scale-to-zero or teardown choice, and optionally perform an authorized live inbound SMS or Voice smoke. Use `docs/demo.md` for the deterministic reviewer walkthrough.
 
 Do not add speech recognition, inbound-call scheduling, recurrence, registration, new apps, or enable real worker delivery.
 
@@ -188,8 +201,8 @@ This places a real call and has not been run in this repository session. Both ca
 - Twilio Verify has mocked coverage but has not been live-smoke-tested with a service SID and test number.
 - Twilio SMS API submission is live-smoke-tested to both a physical destination and Twilio's Virtual Phone. The Virtual Phone request returned a valid Message SID and a fully audited local `submitted` attempt; inbox visibility still requires operator confirmation in Twilio Console. Successful physical carrier delivery remains pending Sole Proprietor A2P 10DLC registration and campaign association for the purchased sender.
 - Twilio Voice submission and signed callbacks have mocked coverage but have not been live-smoke-tested with a public HTTPS callback URL and authorized staging number.
-- Twilio inbound SMS has deterministic signed-request and PostgreSQL concurrency coverage but has not been live-smoke-tested. Provider-side inbound webhook configuration, Advanced Opt-Out behavior, and carrier compliance require separate manual verification.
-- `TWILIO_VOICE_ACTION_CALLBACK_URL` and `TWILIO_SMS_INBOUND_CALLBACK_URL` are constructed from the public application domain; they are not issued by Twilio. `TWILIO_SMS_FROM_NUMBER` is the SMS-capable E.164 number listed in Twilio Console. Local Compose and Phase 10 task-definition wiring is complete, but the latest image and updated task definitions still require an operator rollout before deployed interaction smoke tests.
+- Twilio inbound SMS has deterministic signed-request and PostgreSQL concurrency coverage and its provider-side webhook is configured, but it has not been live-smoke-tested. Advanced Opt-Out behavior and carrier compliance require separate manual verification.
+- `TWILIO_VOICE_ACTION_CALLBACK_URL` and `TWILIO_SMS_INBOUND_CALLBACK_URL` are constructed from the public application domain; they are not issued by Twilio. `TWILIO_SMS_FROM_NUMBER` is the SMS-capable E.164 number listed in Twilio Console. Compose and deployed ECS task-definition wiring are complete.
 - The API relies on existing users; registration and token issuance are not exposed.
 - DRF's cache-backed verification throttles are approximate and process-local with the current default cache. A multi-process deployment needing a strict shared abuse or billing boundary requires a shared cache or database-backed policy.
 - HTTP Basic authentication is suitable for this bounded exercise/testing surface only and requires TLS; production deployment should explicitly choose session-based browser access or a managed/token authentication design.

@@ -13,6 +13,7 @@ ARG REQUIREMENTS_FILE=requirements/production.txt
 RUN pip install --upgrade pip && pip install -r "${REQUIREMENTS_FILE}"
 
 COPY --chown=appuser:appuser . .
+RUN python manage.py collectstatic --noinput
 
 USER appuser
 

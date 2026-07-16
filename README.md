@@ -47,7 +47,7 @@ GET https://wakeupcall.afam.app/health/
 
 The deployment uses an immutable `linux/amd64` image in ECR, an HTTPS ALB, private Fargate web and worker tasks, private RDS PostgreSQL, SQS with a DLQ, EventBridge Scheduler, Secrets Manager, CloudWatch logs and alarms, and a confirmed SNS alarm-email subscription. The one-minute Scheduler is enabled, but queued real-provider delivery remains disabled. Automatic staging ticks process demo events through the complete weather/render/audit path and suppress Twilio submission.
 
-The ordered rollout, secret handling, migration task, safety gates, validation, rollback, and teardown process are documented in [`docs/deployment.md`](docs/deployment.md). The templates create billable resources; keep real delivery disabled unless destinations, provider compliance, and cost have been explicitly approved.
+The ordered rollout, secret handling, migration task, safety gates, validation, rollback, and teardown process are documented in [`docs/deployment.md`](docs/deployment.md). A reviewer-oriented walkthrough with expected evidence is in [`docs/demo.md`](docs/demo.md). The templates create billable resources; keep real delivery disabled unless destinations, provider compliance, and cost have been explicitly approved.
 
 ## Environment configuration
 
@@ -194,6 +194,7 @@ Run the same commands in Docker by prefixing them with `docker compose run --rm 
 
 - [`AGENTS.md`](AGENTS.md) defines the required workflow and constraints for AI agents and contributors.
 - [`docs/handoff.md`](docs/handoff.md) records the current state and exact next recommended slice.
+- [`docs/demo.md`](docs/demo.md) provides the safe reviewer walkthrough and expected evidence.
 - [`docs/domain.md`](docs/domain.md) defines entities, invariants, and status transitions.
 - [`docs/architecture.md`](docs/architecture.md) separates the as-built system from the planned production design.
 - [`docs/roadmap.md`](docs/roadmap.md) sequences future work and documents phase boundaries.

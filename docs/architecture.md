@@ -235,7 +235,7 @@ Responses are short Messaging TwiML and do not echo event data, provider identif
 
 Responsible for scanning and claiming one bounded due-event batch, retrieving weather, rendering announcements, selecting the demo or real sender, and recording attempts. It is not responsible for polling queues or configuring vendor clients.
 
-## Target Deployment Architecture — Artifacts Implemented, Not Deployed
+## Deployed Staging Architecture
 
 ```text
 Browser / API client
@@ -257,16 +257,16 @@ Twilio status/action callbacks ---> Django web <---- Twilio inbound SMS
 Container stdout/stderr --------------------> CloudWatch Logs
 ```
 
-Deployment artifacts cover:
+The deployed staging environment covers:
 
 - Django web Fargate service behind an Application Load Balancer
 - Worker Fargate service using the same image with a different command
 - RDS PostgreSQL as the source of truth
 - Deployment of the implemented SQS Standard queue, dead-letter queue, alarms, and Scheduler tick
-- Real weather REST adapter with bounded timeouts (implemented locally; deployment configuration remains planned)
-- Twilio Verify, SMS, and Voice adapters (implemented locally)
-- Authenticated Twilio Voice status callbacks (implemented locally)
-- Authenticated Twilio inbound SMS controls (implemented locally)
+- Real weather REST adapter with bounded timeouts and worker configuration from Secrets Manager
+- Twilio Verify, SMS, and Voice adapters in the shared deployed image
+- Authenticated Twilio Voice status and action callback routes with canonical HTTPS configuration
+- Authenticated Twilio inbound SMS controls with the SMS-capable Twilio number configured to POST to the public route
 - CloudWatch logs, basic metrics, and alarms
 - Secrets Manager for application and RDS credentials
 
