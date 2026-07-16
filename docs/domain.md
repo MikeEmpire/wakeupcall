@@ -2,7 +2,7 @@
 
 ## Scope
 
-The current domain supports authenticated creation and ownership-scoped access to one-time weather announcements for a verified US phone number by SMS or voice. Demo delivery is wired end to end, due events can move through a versioned SQS worker boundary, Twilio Verify is implemented behind an application gateway, and non-demo SMS and voice events can be submitted through explicitly gated commands. Voice call progress is recorded from authenticated Twilio callbacks.
+The current domain supports authenticated creation and ownership-scoped access to one-time weather announcements for a verified US phone number by SMS or voice. Demo delivery is wired end to end, due events can move through a versioned SQS worker boundary, Twilio Verify is implemented behind an application gateway, and non-demo SMS and voice events can be submitted through explicitly gated commands. Voice call progress and bounded Voice/SMS reply controls are processed through authenticated Twilio callbacks.
 
 ## User
 
@@ -182,6 +182,22 @@ A valid action locks the submitted Voice attempt first and records its digit, no
 
 The weather snapshot is JSON because it is historical evidence with a small provider-normalized shape, not relational data used for filtering.
 
+## InboundSmsCommand
+
+Represents the idempotency and audit record for one Twilio inbound SMS callback. It stores only the provider Message SID, normalized command/result, optional target event ID, and completion time. The inbound sender and message body are used only during signed request processing and are never persisted or logged.
+
+The deliberately small, case-insensitive grammar is:
+
+- `STOP`: cancel the owner’s next pending event
+- `SMS`: switch the owner’s next pending event to SMS
+- `TIME <ISO-8601-with-offset>`: reschedule the owner’s next pending event using the Phase 11 future-time and explicit-offset rules
+
+“Next pending event” is the verified sender owner’s earliest event still in `scheduled`, ordered by `scheduled_for` and ID. A callback cannot submit a user or event identifier. Unknown and unverified senders receive the same non-sensitive result.
+
+The provider Message SID is globally unique. Processing locks or creates that record before selecting the event, and the event mutation plus normalized callback result commit in one transaction. Sequential and concurrent requests reusing a Message SID return the first stored result, even if later request fields conflict. Invalid commands and times, no pending event, and lifecycle conflicts are recorded without an event mutation.
+
+Twilio reserves `STOP` for carrier-compliance opt-out behavior. When Advanced Opt-Out forwards a `STOP` callback with `OptOutType=STOP`, the application still cancels one pending event but returns empty TwiML because Twilio has already sent its compliance reply. This event cancellation neither replaces nor claims to manage Twilio’s sender-level opt-out state.
+
 ## Demo Delivery Invariant
 
 A demo event follows the normal workflow through weather lookup, announcement rendering, and attempt creation. At the sender boundary it must use `DemoMessageSender`, which logs only the channel, masked destination, and message length. The complete rendered announcement remains in the delivery-attempt audit record rather than application logs. The event then becomes `suppressed`.
@@ -199,6 +215,7 @@ The Twilio Voice adapter follows the same demo restriction and returns only a va
 - The local dispatcher selects due `scheduled` events oldest-first in a bounded batch and claims them with PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED`.
 - Dispatcher runs are demo-only by default. Including real events requires both the disabled-by-default environment gate and an explicit command flag.
 - Claiming permits only `scheduled` events to enter `processing`; cancellation, rescheduling, and channel switching use the same row-lock boundary, so concurrent operations serialize against authoritative state. Claiming first rejects a later pending-event change. A time or channel change that commits first may be followed legally by cancellation or claiming. A `SKIP LOCKED` batch may safely defer a row being changed until the next scheduler tick.
+- Inbound SMS callbacks serialize duplicate provider Message SIDs on a unique row and apply at most one Phase 11 mutation. PostgreSQL tests cover concurrent conflicting duplicates; SQLite provides functional callback coverage only.
 - An event whose scheduled time is strictly more than the configured grace period in the past transitions through `processing` to `failed`, with a `MissedDeliveryWindow` attempt. It does not call weather or message providers. The default grace period is 15 minutes.
 - Reprocessing a terminal delivered/failed/suppressed event returns the latest attempt without another send.
 - A `processing` or `cancelled` event is not deliverable.

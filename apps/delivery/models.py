@@ -110,3 +110,33 @@ class DeliveryAttempt(models.Model):
         self.provider_status_sequence = sequence_number
         self.provider_status_updated_at = at or timezone.now()
         return True
+
+
+class InboundSmsCommand(models.Model):
+    class Command(models.TextChoices):
+        STOP = "stop", "Stop next event"
+        SMS = "sms", "Switch next event to SMS"
+        TIME = "time", "Change next event time"
+        INVALID = "invalid", "Invalid command"
+
+    class Result(models.TextChoices):
+        CANCELLED = "cancelled", "Cancelled next event"
+        SWITCHED_TO_SMS = "switched_to_sms", "Switched next event to SMS"
+        RESCHEDULED = "rescheduled", "Rescheduled next event"
+        NO_PENDING_EVENT = "no_pending_event", "No pending event"
+        UNKNOWN_SENDER = "unknown_sender", "Unknown or unverified sender"
+        INVALID_COMMAND = "invalid_command", "Invalid command"
+        INVALID_TIME = "invalid_time", "Invalid time"
+        LIFECYCLE_CONFLICT = "lifecycle_conflict", "Lifecycle conflict"
+
+    provider_sid = models.CharField(max_length=64, unique=True)
+    command = models.CharField(max_length=12, choices=Command.choices)
+    result = models.CharField(max_length=24, choices=Result.choices)
+    target_event_id = models.PositiveBigIntegerField(blank=True, null=True)
+    completed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-completed_at", "-id"]
+
+    def __str__(self):
+        return f"Inbound SMS command {self.id}"

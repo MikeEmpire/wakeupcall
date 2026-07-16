@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 from django.core.exceptions import ValidationError
@@ -11,10 +11,14 @@ from apps.delivery.gateways import DemoMessageSender, MessageSender
 from apps.delivery.exceptions import MissedDeliveryWindow
 from apps.delivery.messages import render_weather_announcement
 from apps.delivery.models import DeliveryAttempt
+from apps.delivery.models import InboundSmsCommand
+from apps.accounts.models import PhoneNumber
 from apps.scheduling.models import ScheduledEvent
 from apps.scheduling.services import (
+    ScheduledEventLifecycleConflict,
     cancel_user_scheduled_event,
     change_user_scheduled_event_channel,
+    reschedule_user_scheduled_event,
 )
 from apps.weather.providers import WeatherProvider
 
@@ -52,6 +56,14 @@ class ProviderStatusUpdate:
 @dataclass(frozen=True)
 class VoiceMenuActionResult:
     attempt: DeliveryAttempt
+    outcome: str
+    target_event_id: int | None
+    applied: bool
+
+
+@dataclass(frozen=True)
+class InboundSmsCommandResult:
+    command: InboundSmsCommand
     outcome: str
     target_event_id: int | None
     applied: bool
@@ -501,6 +513,122 @@ def apply_voice_menu_action(
         attempt=attempt,
         outcome=outcome,
         target_event_id=target_event_id,
+        applied=True,
+    )
+
+
+def _parse_inbound_sms_command(body: str):
+    normalized = body.strip()
+    keyword, separator, argument = normalized.partition(" ")
+    keyword = keyword.upper()
+    if keyword == "STOP" and not separator:
+        return InboundSmsCommand.Command.STOP, None
+    if keyword == "SMS" and not separator:
+        return InboundSmsCommand.Command.SMS, None
+    if keyword != "TIME" or not separator or not argument.strip():
+        return InboundSmsCommand.Command.INVALID, None
+
+    raw_time = argument.strip()
+    if any(character.isspace() for character in raw_time):
+        return InboundSmsCommand.Command.TIME, None
+    try:
+        scheduled_for = datetime.fromisoformat(raw_time)
+    except ValueError:
+        scheduled_for = None
+    return InboundSmsCommand.Command.TIME, scheduled_for
+
+
+@transaction.atomic
+def apply_inbound_sms_command(
+    *,
+    provider_sid: str,
+    sender: str,
+    body: str,
+    completed_at=None,
+) -> InboundSmsCommandResult:
+    command_record, created = (
+        InboundSmsCommand.objects.select_for_update().get_or_create(
+            provider_sid=provider_sid,
+            defaults={
+                "command": InboundSmsCommand.Command.INVALID,
+                "result": InboundSmsCommand.Result.INVALID_COMMAND,
+                "completed_at": completed_at or timezone.now(),
+            },
+        )
+    )
+    if not created:
+        return InboundSmsCommandResult(
+            command=command_record,
+            outcome=command_record.result,
+            target_event_id=command_record.target_event_id,
+            applied=False,
+        )
+
+    command, scheduled_for = _parse_inbound_sms_command(body)
+    phone = (
+        PhoneNumber.objects.select_related("user")
+        .filter(number=sender, verified_at__isnull=False)
+        .first()
+    )
+
+    target = None
+    if phone is None:
+        outcome = InboundSmsCommand.Result.UNKNOWN_SENDER
+    elif command == InboundSmsCommand.Command.INVALID:
+        outcome = InboundSmsCommand.Result.INVALID_COMMAND
+    elif command == InboundSmsCommand.Command.TIME and scheduled_for is None:
+        outcome = InboundSmsCommand.Result.INVALID_TIME
+    else:
+        target = (
+            ScheduledEvent.objects.select_for_update()
+            .filter(
+                user_id=phone.user_id,
+                status=ScheduledEvent.Status.SCHEDULED,
+            )
+            .order_by("scheduled_for", "id")
+            .first()
+        )
+        if target is None:
+            outcome = InboundSmsCommand.Result.NO_PENDING_EVENT
+        else:
+            try:
+                if command == InboundSmsCommand.Command.STOP:
+                    cancel_user_scheduled_event(
+                        target.id,
+                        user=phone.user,
+                        cancelled_at=completed_at or timezone.now(),
+                    )
+                    outcome = InboundSmsCommand.Result.CANCELLED
+                elif command == InboundSmsCommand.Command.SMS:
+                    change_user_scheduled_event_channel(
+                        target.id,
+                        user=phone.user,
+                        channel=ScheduledEvent.Channel.SMS,
+                    )
+                    outcome = InboundSmsCommand.Result.SWITCHED_TO_SMS
+                else:
+                    reschedule_user_scheduled_event(
+                        target.id,
+                        user=phone.user,
+                        scheduled_for=scheduled_for,
+                    )
+                    outcome = InboundSmsCommand.Result.RESCHEDULED
+            except ScheduledEventLifecycleConflict:
+                outcome = InboundSmsCommand.Result.LIFECYCLE_CONFLICT
+            except ValidationError:
+                outcome = InboundSmsCommand.Result.INVALID_TIME
+
+    command_record.command = command
+    command_record.result = outcome
+    command_record.target_event_id = target.id if target is not None else None
+    command_record.completed_at = completed_at or timezone.now()
+    command_record.save(
+        update_fields=["command", "result", "target_event_id", "completed_at"]
+    )
+    return InboundSmsCommandResult(
+        command=command_record,
+        outcome=outcome,
+        target_event_id=command_record.target_event_id,
         applied=True,
     )
 

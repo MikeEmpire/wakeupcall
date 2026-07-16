@@ -2,7 +2,9 @@
 
 ## Purpose and stopping boundary
 
-Phase 10 supplies deployment-ready CloudFormation and an operator sequence. It does not create resources from this repository session. Deploying these templates creates billable ECR, SNS, SQS, EventBridge Scheduler, NAT Gateway, ALB, ECS/Fargate, RDS, Secrets Manager, CloudWatch Logs, and Route 53 resources.
+Phase 10 supplied the CloudFormation and operator sequence used for the live staging deployment in `us-east-1`. The `wakeup-call-staging-foundation`, `wakeup-call-staging-queue`, and `wakeup-call-staging-application` stacks are deployed. Cloudflare provides DNS for `wakeupcall.afam.app`, the ACM certificate is issued, and the public TLS health endpoint is live. The templates create billable ECR, SNS, SQS, EventBridge Scheduler, NAT Gateway, ALB, ECS/Fargate, RDS, Secrets Manager, and CloudWatch resources; Route 53 remains optional.
+
+The currently deployed image is the immutable `b1d7d4fb93a689e17e3f2ce2e0518b80c364c375` tag. Later application phases must be built, migrated, and deployed before their behavior can be claimed in staging.
 
 The application behavior is unchanged. One image runs as three explicit ECS task definitions:
 
@@ -131,7 +133,29 @@ Use the `ApplicationSecretArn` output. In the Secrets Manager console, edit its 
 
 Do not paste the actual JSON into chat, tickets, source control, command arguments, or logs. If secrets are updated after services start, force a new ECS deployment because running tasks do not receive secret changes automatically.
 
-## 7. Run and verify the migration task
+## 7. Configure Twilio callback values
+
+The callback URLs are application configuration, not credentials supplied by Twilio. Construct them from the exact public application origin and committed endpoint paths:
+
+```text
+TWILIO_VOICE_STATUS_CALLBACK_URL=https://wakeupcall.afam.app/twilio/voice/status/
+TWILIO_VOICE_ACTION_CALLBACK_URL=https://wakeupcall.afam.app/twilio/voice/action/
+TWILIO_SMS_INBOUND_CALLBACK_URL=https://wakeupcall.afam.app/twilio/sms/inbound/
+```
+
+Keep the scheme, host, path, and trailing slash exact. Twilio includes the complete URL when signing a webhook, so a configured URL that differs from the URL used by Django will fail signature validation.
+
+`TWILIO_SMS_FROM_NUMBER` is the SMS-capable Twilio number assigned to the account, in E.164 format. Find it in Twilio Console under **Phone Numbers → Manage → Active Numbers**. Copy the number itself, not its `PN...` resource SID. For this deployment it remains an application-secret JSON value rather than a CloudFormation parameter:
+
+```text
+TWILIO_SMS_FROM_NUMBER=+1XXXXXXXXXX
+```
+
+In the selected active number's Messaging configuration, set **A message comes in** to a webhook using HTTP `POST` and `https://wakeupcall.afam.app/twilio/sms/inbound/`. The Voice action URL is not configured on the phone-number page: the worker embeds it in the outbound call's `<Gather>` TwiML. The Voice status URL is supplied when the application creates the outbound call.
+
+The web task requires `TWILIO_VOICE_ACTION_CALLBACK_URL`, `TWILIO_SMS_INBOUND_CALLBACK_URL`, and `TWILIO_SMS_FROM_NUMBER`. The worker requires `TWILIO_VOICE_ACTION_CALLBACK_URL` so it can render the menu TwiML. The current Phase 10 task definitions do not yet inject all of these values; update and validate the template before deploying the Phase 14/15 image.
+
+## 8. Run and verify the migration task
 
 Read `ClusterArn`, `MigrationTaskDefinitionArn`, `ApplicationSubnetIds`, and `WorkerSecurityGroupId` from the application stack outputs. Run exactly one migration task in the private application subnets:
 
@@ -151,7 +175,7 @@ aws ecs wait tasks-stopped --cluster CLUSTER_ARN --tasks MIGRATION_TASK_ARN
 aws ecs describe-tasks --cluster CLUSTER_ARN --tasks MIGRATION_TASK_ARN --query 'tasks[0].containers[0].{exitCode:exitCode,reason:reason}'
 ```
 
-## 8. Start services safely
+## 9. Start services safely
 
 Update the application stack using the same parameters, changing `WebDesiredCount=1` and `WorkerDesiredCount=1`. Keep `EnableRealWorkerDelivery=false` initially. Confirm:
 
@@ -165,7 +189,7 @@ Update the application stack using the same parameters, changing `WebDesiredCoun
 
 Only after those checks should the queue stack be updated to `ScheduleState=ENABLED`. A Scheduler tick contains no phone number or event body.
 
-## 9. Real-delivery gate
+## 10. Real-delivery gate
 
 Real queue delivery requires both `EnableRealWorkerDelivery=true` in the application stack and the worker command's `--allow-real-delivery`; the template changes them together. Leave the parameter false until destinations, provider compliance, cost, and operator authorization have been reviewed. Demo events still select `DemoMessageSender` in application orchestration and cannot reach Twilio.
 
@@ -175,6 +199,7 @@ Changing this gate requires a new worker task definition and ECS deployment. It 
 
 - Roll back application code by redeploying a previously published immutable `ImageUri`, running its compatible migrations if required, and waiting for ECS steady state.
 - Disable the Scheduler before stopping workers or investigating queue failures.
+- To scale application compute to zero without deleting data, update the queue stack to `ScheduleState=DISABLED`, then update the application stack to `WebDesiredCount=0` and `WorkerDesiredCount=0`. This stops Fargate task charges but does not stop charges for the NAT Gateway, ALB, RDS, or retained storage.
 - Inspect DLQ messages without logging message bodies or receipt handles. Automatic provider replay remains prohibited where Twilio acceptance is ambiguous.
 - Deleting the application stack snapshots RDS. The application secret and ECR repository are retained deliberately and require separate, explicit cleanup. Deletion protection must be disabled before deleting an RDS instance that has it enabled.
 

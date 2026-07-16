@@ -18,6 +18,10 @@ class MalformedVoiceActionCallback(RuntimeError):
     pass
 
 
+class MalformedInboundSmsCallback(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class VoiceStatusCallback:
     provider_sid: str
@@ -29,6 +33,63 @@ class VoiceStatusCallback:
 class VoiceActionCallback:
     provider_sid: str
     digit: str
+
+
+@dataclass(frozen=True)
+class InboundSmsCallback:
+    provider_sid: str
+    sender: str
+    body: str
+    opt_out_type: str
+
+
+class TwilioInboundSmsWebhook:
+    def __init__(
+        self,
+        *,
+        auth_token: str,
+        callback_url: str,
+        recipient: str,
+        validator=None,
+    ):
+        if not auth_token or not callback_url or not recipient:
+            raise MalformedInboundSmsCallback(
+                "Twilio inbound SMS validation is not configured."
+            )
+        self.callback_url = callback_url
+        self.recipient = recipient
+        self.validator = validator or RequestValidator(auth_token)
+
+    def parse(self, *, params, signature: str) -> InboundSmsCallback:
+        if not signature or not self.validator.validate(
+            self.callback_url,
+            params,
+            signature,
+        ):
+            raise InvalidTwilioSignature("Invalid Twilio webhook signature.")
+
+        provider_sid = params.get("MessageSid", "")
+        sender = params.get("From", "")
+        recipient = params.get("To", "")
+        body = params.get("Body", "")
+        opt_out_type = params.get("OptOutType", "")
+        if (
+            not re.fullmatch(r"SM[0-9a-fA-F]{32}", provider_sid)
+            or not re.fullmatch(r"\+[1-9]\d{1,14}", sender)
+            or recipient != self.recipient
+            or not isinstance(body, str)
+            or len(body) > 1600
+            or opt_out_type not in {"", "STOP", "START", "HELP"}
+        ):
+            raise MalformedInboundSmsCallback(
+                "The inbound SMS callback was malformed."
+            )
+        return InboundSmsCallback(
+            provider_sid=provider_sid,
+            sender=sender,
+            body=body,
+            opt_out_type=opt_out_type,
+        )
 
 
 class TwilioVoiceActionWebhook:

@@ -176,7 +176,17 @@ For a staging voice call, also configure `TWILIO_VOICE_FROM_NUMBER`, the public 
 python manage.py send_staging_voice_event EVENT_ID --confirm-call
 ```
 
-Twilio signs callback requests to `POST /twilio/voice/status/` and `POST /twilio/voice/action/`. Each configured callback URL must exactly match its public HTTPS URL. Voice TwiML offers a one-digit menu after the announcement: `1` cancels the owner’s earliest still-`scheduled` event and `2` switches it to SMS. Action retries are audited on the call attempt and cannot apply twice.
+Twilio signs callback requests to `POST /twilio/voice/status/`, `POST /twilio/voice/action/`, and `POST /twilio/sms/inbound/`. Each configured callback URL must exactly match its public HTTPS URL. Voice TwiML offers a one-digit menu after the announcement: `1` cancels the owner’s earliest still-`scheduled` event and `2` switches it to SMS. Inbound SMS accepts only `STOP`, `SMS`, or `TIME <ISO-8601-with-offset>` from a verified sender and applies the command to that owner’s earliest pending event. Provider identifiers make retries idempotent without storing SMS bodies or sender numbers.
+
+For the deployed staging domain, the non-secret callback settings are constructed from the application URL rather than obtained from Twilio:
+
+```text
+TWILIO_VOICE_STATUS_CALLBACK_URL=https://wakeupcall.afam.app/twilio/voice/status/
+TWILIO_VOICE_ACTION_CALLBACK_URL=https://wakeupcall.afam.app/twilio/voice/action/
+TWILIO_SMS_INBOUND_CALLBACK_URL=https://wakeupcall.afam.app/twilio/sms/inbound/
+```
+
+`TWILIO_SMS_FROM_NUMBER` is the SMS-capable E.164 number listed under **Phone Numbers → Manage → Active Numbers** in Twilio Console. Configure that number's **A message comes in** webhook as HTTP `POST` to the inbound URL above. The Voice action URL is embedded in generated `<Gather>` TwiML, while the Voice status URL is submitted with the outbound call. Exact URLs, including trailing slashes, are required for signature validation. See [`docs/deployment.md`](docs/deployment.md) for ECS injection and rollout details.
 
 Run the same commands in Docker by prefixing them with `docker compose run --rm web`.
 
@@ -190,4 +200,4 @@ Run the same commands in Docker by prefixing them with `docker compose run --rm 
 
 ## Current boundaries
 
-Registration, token issuance, inbound SMS commands, and speech interaction are not implemented yet. The staging AWS environment is live with automatic demo processing, but real queued SMS and Voice remain explicitly gated off. Voice callback routes are provider-only, public event creation remains demo-only, and a Twilio provider acceptance result is never described as final carrier delivery.
+Public account registration, token issuance, and speech interaction are not implemented. Staff provision existing users through Django Admin; users then sign in, enroll and verify their phone, and manage their own events. The staging AWS environment is live with automatic demo processing, but real queued SMS and Voice remain explicitly gated off. Twilio callback routes are provider-only, public event creation remains demo-only, and a Twilio provider acceptance result is never described as final carrier delivery.

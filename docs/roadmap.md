@@ -181,18 +181,17 @@ Goal: satisfy the call-interaction requirement with one bounded DTMF flow; speec
 - Invalid, unknown, stale, and no-pending-event cases return safe bounded TwiML with no unintended mutation.
 - Mocked adapter, signature, lifecycle, ownership, duplicate, and PostgreSQL concurrency tests precede any live smoke.
 
-## Phase 15: Inbound SMS Controls — Next
+## Completed Inbound SMS Controls
 
-Goal: give the text-message path equivalent bounded controls if the assignment is interpreted to require replies from both communication methods.
+Goal: give the text-message path equivalent bounded controls.
 
-Scope:
-
-- Add a Twilio-signed inbound SMS webhook.
-- Define a deliberately small command grammar for stop, channel switching, and changing the next pending time.
-- Resolve the user from the verified destination safely, apply changes through the Phase 11 services, and make duplicate provider requests idempotent.
-- Return short, non-sensitive TwiML responses and avoid logging message bodies or full phone numbers.
-
-Exit criteria: mocked signed requests cover every command, invalid input, unknown/unverified senders, duplicates, and lifecycle conflicts. A real inbound SMS smoke remains optional and compliance-gated.
+- A Twilio-signed inbound SMS webhook accepts only `STOP`, `SMS`, and `TIME <ISO-8601-with-offset>`.
+- The verified inbound sender resolves ownership; user and event identifiers are never accepted from callback input.
+- Commands target the owner’s earliest still-`scheduled` event by time and ID and delegate to the Phase 11 mutation services.
+- A unique provider Message SID audit record makes sequential and concurrent conflicting callbacks idempotent.
+- Short Messaging TwiML covers successful changes, invalid input, unknown/unverified senders, no pending event, and lifecycle conflict without echoing sensitive data.
+- Advanced Opt-Out `STOP` callbacks return empty TwiML after local cancellation so Twilio’s compliance response is not duplicated.
+- Mocked functional coverage runs on SQLite and duplicate row-lock behavior runs against PostgreSQL. A real inbound SMS smoke remains optional and compliance-gated.
 
 ## Phase 16: Submission and Operations Polish — Planned
 

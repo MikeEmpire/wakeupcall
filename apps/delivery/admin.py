@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import DeliveryAttempt
+from .models import DeliveryAttempt, InboundSmsCommand
 
 
 @admin.register(DeliveryAttempt)
@@ -34,6 +34,23 @@ class DeliveryAttemptAdmin(admin.ModelAdmin):
         "error_code",
         "error_message",
         "started_at",
+        "completed_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(InboundSmsCommand)
+class InboundSmsCommandAdmin(admin.ModelAdmin):
+    list_display = ("id", "command", "result", "target_event_id", "completed_at")
+    list_filter = ("command", "result")
+    search_fields = ("provider_sid", "target_event_id")
+    readonly_fields = (
+        "provider_sid",
+        "command",
+        "result",
+        "target_event_id",
         "completed_at",
     )
 

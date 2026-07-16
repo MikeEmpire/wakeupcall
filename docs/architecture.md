@@ -20,7 +20,7 @@ The repository is one Django project with four local applications:
 | --- | --- |
 | `accounts` | Custom user, owned phone numbers, verification services, authenticated API/browser phone workflows, and Twilio Verify adapter |
 | `scheduling` | One-time scheduled events, authenticated owner-scoped API/browser workflows, row-locked pending-event mutation services, admin action, lifecycle, and deterministic scenario seeding |
-| `delivery` | Delivery attempts, due-event publication and claiming, SQS transport/worker, announcement rendering, Twilio adapters, callback handling, and orchestration |
+| `delivery` | Delivery attempts, inbound SMS command audits, due-event publication and claiming, SQS transport/worker, announcement rendering, Twilio adapters, callback handling, and orchestration |
 | `weather` | Normalized weather value object, provider boundary, deterministic fake, and WeatherAPI.com REST adapter |
 
 The current system supports both the direct bounded command and an SQS worker path. Queue processing is demo-only by default; real events require a separate environment gate and explicit worker flag. Single-event staging commands remain available for isolated provider smoke tests:
@@ -223,6 +223,14 @@ The callback service locks the submitted voice attempt by Call SID. Newer sequen
 
 The action service locks the attempt, returns any previously recorded result, then locks the owner’s earliest `scheduled` event. Digit `1` delegates to the existing cancellation service and digit `2` delegates to the existing channel-change service. The event mutation and attempt audit marker commit atomically. Concurrent duplicates serialize on the attempt row, so one action applies and later callbacks return its result. Invalid input receives bounded TwiML without mutation; unknown or stale calls receive a non-sensitive terminal prompt.
 
+### Inbound SMS controls
+
+`POST /twilio/sms/inbound/` is a Twilio-signed provider endpoint with a configured canonical HTTPS URL. It accepts only the provider Message SID, inbound sender, configured Twilio recipient, message body, and optional Advanced Opt-Out classification needed for processing. The verified inbound sender resolves the owner; request-supplied user and event identifiers are neither accepted nor trusted.
+
+The command grammar is limited to `STOP`, `SMS`, and `TIME <ISO-8601-with-offset>`. The application locks the provider-SID audit row and the owner’s earliest still-`scheduled` event, then delegates cancellation, channel change, or rescheduling to the Phase 11 services. The provider SID has a database uniqueness constraint, so sequential and concurrent conflicting retries return the first normalized result without a second mutation.
+
+Responses are short Messaging TwiML and do not echo event data, provider identifiers, phone numbers, or message bodies. Unknown and unverified senders are indistinguishable. Message bodies, full phone numbers, raw requests, and secrets are not stored or logged. If Twilio reports `OptOutType=STOP`, the response contains no `<Message>` because Twilio has already generated the compliance reply; the local event cancellation remains independent of Twilio opt-out state.
+
 ### Delivery service
 
 Responsible for scanning and claiming one bounded due-event batch, retrieving weather, rendering announcements, selecting the demo or real sender, and recording attempts. It is not responsible for polling queues or configuring vendor clients.
@@ -244,7 +252,7 @@ EventBridge minute tick ---> SQS ---> Fargate worker
                                       |
                                       +----------> Twilio SMS / Voice
                                                     |
-Twilio status callback ---> Django web <------------+
+Twilio status/action callbacks ---> Django web <---- Twilio inbound SMS
 
 Container stdout/stderr --------------------> CloudWatch Logs
 ```
@@ -258,6 +266,7 @@ Deployment artifacts cover:
 - Real weather REST adapter with bounded timeouts (implemented locally; deployment configuration remains planned)
 - Twilio Verify, SMS, and Voice adapters (implemented locally)
 - Authenticated Twilio Voice status callbacks (implemented locally)
+- Authenticated Twilio inbound SMS controls (implemented locally)
 - CloudWatch logs, basic metrics, and alarms
 - Secrets Manager for application and RDS credentials
 

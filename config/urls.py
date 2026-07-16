@@ -2,7 +2,11 @@ from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.urls import include, path
 
-from apps.delivery.views import twilio_voice_action, twilio_voice_status
+from apps.delivery.views import (
+    twilio_inbound_sms,
+    twilio_voice_action,
+    twilio_voice_status,
+)
 from config.views import health
 
 urlpatterns = [
@@ -27,5 +31,10 @@ urlpatterns = [
         "twilio/voice/action/",
         twilio_voice_action,
         name="twilio-voice-action",
+    ),
+    path(
+        "twilio/sms/inbound/",
+        twilio_inbound_sms,
+        name="twilio-inbound-sms",
     ),
 ]

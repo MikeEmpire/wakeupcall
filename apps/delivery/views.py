@@ -5,17 +5,21 @@ from django.views.decorators.http import require_POST
 
 from apps.delivery.services import (
     DeliveryAttemptNotFound,
+    apply_inbound_sms_command,
     apply_voice_menu_action,
     record_voice_status_callback,
 )
 from apps.delivery.twilio_webhooks import (
     InvalidTwilioSignature,
+    MalformedInboundSmsCallback,
     MalformedVoiceActionCallback,
     MalformedVoiceStatusCallback,
     TwilioVoiceActionWebhook,
     TwilioVoiceStatusWebhook,
+    TwilioInboundSmsWebhook,
 )
-from apps.delivery.models import DeliveryAttempt
+from apps.delivery.models import DeliveryAttempt, InboundSmsCommand
+from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
 
 
@@ -52,6 +56,30 @@ def _voice_action_result_twiml(outcome):
         ),
     }
     response.say(messages[outcome])
+    return str(response)
+
+
+def _inbound_sms_result_twiml(outcome, *, suppress_message=False):
+    response = MessagingResponse()
+    if suppress_message:
+        return str(response)
+    messages = {
+        InboundSmsCommand.Result.CANCELLED: "Next wake-up cancelled.",
+        InboundSmsCommand.Result.SWITCHED_TO_SMS: "Next wake-up set to SMS.",
+        InboundSmsCommand.Result.RESCHEDULED: "Next wake-up time updated.",
+        InboundSmsCommand.Result.NO_PENDING_EVENT: "No pending wake-up.",
+        InboundSmsCommand.Result.UNKNOWN_SENDER: "Request could not be processed.",
+        InboundSmsCommand.Result.INVALID_COMMAND: (
+            "Use STOP, SMS, or TIME followed by an ISO 8601 time with an offset."
+        ),
+        InboundSmsCommand.Result.INVALID_TIME: (
+            "Use a future ISO 8601 time with an explicit offset."
+        ),
+        InboundSmsCommand.Result.LIFECYCLE_CONFLICT: (
+            "That wake-up can no longer be changed."
+        ),
+    }
+    response.message(messages[outcome])
     return str(response)
 
 
@@ -120,5 +148,38 @@ def twilio_voice_action(request):
 
     return HttpResponse(
         _voice_action_result_twiml(result.outcome),
+        content_type="text/xml",
+    )
+
+
+@csrf_exempt
+@require_POST
+def twilio_inbound_sms(request):
+    try:
+        callback = TwilioInboundSmsWebhook(
+            auth_token=settings.TWILIO_AUTH_TOKEN,
+            callback_url=settings.TWILIO_SMS_INBOUND_CALLBACK_URL,
+            recipient=settings.TWILIO_SMS_FROM_NUMBER,
+        ).parse(
+            params=request.POST,
+            signature=request.headers.get("X-Twilio-Signature", ""),
+        )
+    except InvalidTwilioSignature:
+        return HttpResponse(status=403)
+    except MalformedInboundSmsCallback:
+        response = MessagingResponse()
+        response.message("Request could not be processed.")
+        return HttpResponse(str(response), content_type="text/xml")
+
+    result = apply_inbound_sms_command(
+        provider_sid=callback.provider_sid,
+        sender=callback.sender,
+        body=callback.body,
+    )
+    return HttpResponse(
+        _inbound_sms_result_twiml(
+            result.outcome,
+            suppress_message=callback.opt_out_type == "STOP",
+        ),
         content_type="text/xml",
     )
