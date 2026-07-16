@@ -4,7 +4,7 @@
 
 Phase 10 supplied the CloudFormation and operator sequence used for the live staging deployment in `us-east-1`. The `wakeup-call-staging-foundation`, `wakeup-call-staging-queue`, and `wakeup-call-staging-application` stacks are deployed. Cloudflare provides DNS for `wakeupcall.afam.app`, the ACM certificate is issued, and the public TLS health endpoint is live. The templates create billable ECR, SNS, SQS, EventBridge Scheduler, NAT Gateway, ALB, ECS/Fargate, RDS, Secrets Manager, and CloudWatch resources; Route 53 remains optional.
 
-The currently deployed image is the immutable `0c00f5935001115ed12e3d6e0d542bdaa9bdc5d4` tag. Its migration task completed successfully, and the Phase 14/15 application behavior plus Phase 16 callback task wiring are live in staging.
+The currently deployed image is the immutable `003844a3cbd4eee2b7a57c38d66055cd6ecc88b5` tag. Its migration task completed successfully, and the Phase 14/15 application behavior, Phase 16 callback task wiring, and WhiteNoise-served production static assets are live in staging.
 
 The application behavior is unchanged. One image runs as three explicit ECS task definitions:
 

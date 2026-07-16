@@ -4,6 +4,8 @@ Last updated: 2026-07-15
 
 ## Current State
 
+The architecture source of truth now includes an evidence-backed Mermaid suite covering the complete system, responsibility boundaries, six internal service views, primary and background workflows, four external-integration views, persistence, lifecycle, failures, and local/AWS runtime topology. The diagrams distinguish implemented, demo-only, external-limitation, and documented-but-not-implemented behavior and trace their claims to code, tests, design documents, infrastructure templates, and relevant commits. No application behavior changed in this documentation slice.
+
 The project has a working Django foundation, domain models, a bounded local due-event dispatcher, a versioned SQS worker boundary, a real WeatherAPI.com adapter, a Twilio Verify boundary, and Twilio SMS and Voice senders behind `MessageSender`. Non-demo submissions map validated Twilio Message or Call SIDs into the existing `DeliveryResult` and delivery attempt. Provider SDK objects and raw responses remain inside their adapters.
 
 Phase 9 adds a minimal authenticated DRF event API. Basic and session authentication protect every `/api/events/` operation. Users can create demo events for their own verified phone record, list and retrieve only their events, and cancel an owned `scheduled` event through the row-locking service. Cross-user identifiers return `404`; lifecycle conflicts return `409`. Creation requires an explicit ISO 8601 offset and normalizes to UTC. API representations expose a phone record ID rather than a full number and omit attempts, rendered messages, weather audit payloads, and provider identifiers.
@@ -20,7 +22,7 @@ Phase 15 adds a signed inbound SMS webhook with the bounded commands `STOP`, `SM
 
 Phase 10 is live in the staging AWS account in `us-east-1`. The `wakeup-call-staging-foundation`, `wakeup-call-staging-queue`, and `wakeup-call-staging-application` CloudFormation stacks create the immutable ECR repository, shared SNS alarm topic, encrypted SQS/DLQ transport, two-AZ VPC, public TLS ALB, private Fargate tasks, private encrypted RDS PostgreSQL, Secrets Manager configuration, retained log groups, and basic alarms. Cloudflare DNS routes `wakeupcall.afam.app` to the ALB, and the ACM certificate is issued.
 
-Image commit `0c00f5935001115ed12e3d6e0d542bdaa9bdc5d4` was built for `linux/amd64`, pushed under its full commit tag, and deployed to task-definition revisions web `2`, worker `2`, and migration `2`. The migration task completed with exit code 0 on image digest `sha256:c91c12c046023fdae86c95d20c8578513587c2a7280b5add5a11c869c36242ee`. Web and worker are each steady at one running task, the ALB target is healthy, and `https://wakeupcall.afam.app/health/` returns HTTP 200. Provider configuration is stored in the generated application secret; the SMS-capable Twilio number is also configured as the Voice sender, and the worker was force-deployed to load the new secret version.
+Image commit `003844a3cbd4eee2b7a57c38d66055cd6ecc88b5` was built for `linux/amd64`, pushed under its full commit tag, and deployed to task-definition revisions web `3`, worker `3`, and migration `3`. The migration task completed with exit code 0 on image digest `sha256:027e639f71d38d2b1178eccd64fa79b040cc9cacd4c6d5d16e455639b5883070`. Web and worker are each steady at one running task, the ALB target is healthy, `https://wakeupcall.afam.app/health/` returns HTTP 200, and the production stylesheet returns HTTP 200 through WhiteNoise. Provider configuration is stored in the generated application secret; the SMS-capable Twilio number is also configured as the Voice sender. Separate active superuser and ordinary-user credentials are provisioned for the reviewer demo.
 
 The SNS email subscription is confirmed and received an intentional non-sensitive test notification. The one-minute EventBridge Scheduler is enabled. An automatic tick processed the deterministic staging scenarios with the real-delivery gate still false: six due demo events became `suppressed`, four missed demo events failed locally, four due real events remained `scheduled`, and no demo attempt had a provider SID. The queue drained afterward and all five alarms remained `OK`.
 
@@ -71,7 +73,7 @@ The local callback-wiring validation result is:
 
 The staging rollout result is:
 
-- immutable image tag `0c00f5935001115ed12e3d6e0d542bdaa9bdc5d4` was pushed to ECR
+- immutable image tag `003844a3cbd4eee2b7a57c38d66055cd6ecc88b5` was pushed to ECR
 - the Scheduler was disabled during rollout and restored to `ENABLED` at one-minute cadence
 - application and queue stacks finished `UPDATE_COMPLETE`; real worker delivery remains `false`
 - migration task exited 0; web and worker each reached one stable running task
@@ -81,6 +83,7 @@ The staging rollout result is:
 - final synthetic matrix: nine demo `suppressed`, seven demo `failed`, four demo `scheduled`, two demo `cancelled`, one demo `processing`, four real `scheduled`, and three real `submitted`
 - Twilio inbound SMS webhook configuration was updated successfully; live inbound SMS and Voice callback smokes remain unperformed
 - `TWILIO_VOICE_FROM_NUMBER` was populated with the verified Voice-capable Twilio sender and the worker replacement deployment reached steady state; real delivery remains disabled
+- production static assets were collected into the image and served successfully through WhiteNoise; both reviewer roles authenticated with the expected Admin navigation boundary
 
 No public registration, token issuance endpoint, or SMS delivery-status callback exists. Staff can provision existing users through Django Admin. The operator has manually exercised sign-in, phone enrollment/verification, and event scheduling, and confirmed the credentialed weather smoke command succeeds. A live Twilio SMS smoke to a physical US handset reached the Messages API, returned a Message SID, and produced local `submitted` state; Twilio later reported `undelivered` with error `30034` because the US 10DLC sender is not attached to an approved A2P campaign. A second live smoke to Twilio's Virtual Phone also returned a valid Message SID and produced a fully audited local `submitted` attempt without error, providing a carrier-independent demonstration while A2P approval remains pending. Voice and interaction callbacks retain deterministic mocked coverage but have not been live-smoke-tested.
 
