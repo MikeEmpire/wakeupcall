@@ -2,6 +2,13 @@
 
 The project provides a production-minded Django application for scheduling weather-aware SMS and Voice wake-up events. It includes verified one-time events, ownership-scoped APIs, delivery auditing, a bounded dispatcher, an SQS worker boundary, WeatherAPI.com, Twilio Verify, SMS and Voice adapters, authenticated Voice callbacks, PostgreSQL, Docker development services, and an AWS Fargate staging deployment.
 
+## Staging Env Credentials
+
+Username:
+  staging
+Password:
+  wakeupcall
+
 ## Local virtual-environment setup
 
 Python 3.12 is recommended.
